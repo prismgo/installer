@@ -5,6 +5,8 @@ BINARY ?= bin/prismgo
 CMD_DIR ?= ./cmd/prismgo
 APP_DIR ?= tmp/app
 LINT_ARGS ?=
+GO_BUILD_CACHE ?= $(CURDIR)/tmp/gocache
+GOLANGCI_LINT_CACHE_DIR ?= $(CURDIR)/tmp/golangci-lint
 
 HAS_GOMOD := $(wildcard go.mod)
 HAS_CMD := $(wildcard cmd/prismgo)
@@ -88,7 +90,8 @@ lint:
 	@if [ -z "$(HAS_GOMOD)" ]; then \
 		echo "Skipping lint: go.mod is not present yet."; \
 	else \
-		golangci-lint run $(LINT_ARGS); \
+		mkdir -p "$(GO_BUILD_CACHE)" "$(GOLANGCI_LINT_CACHE_DIR)"; \
+		env GOCACHE="$(GO_BUILD_CACHE)" GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE_DIR)" golangci-lint run $(LINT_ARGS) $(PACKAGES); \
 	fi
 
 .PHONY: build
