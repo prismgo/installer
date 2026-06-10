@@ -6,8 +6,10 @@ tmp/
 .claude
 .codex
 .trae
+.agents/
 openspec.yaml
 openspec/
 docs/superpowers/
 coverage.out
 docs/changes/
+skills-lock.json
