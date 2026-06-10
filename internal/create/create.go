@@ -75,6 +75,9 @@ func (s Service) Create(ctx context.Context, opts Options) error {
 		return nil
 	}
 
+	if err := s.Runner.Run(ctx, run.Command{Name: "go", Args: []string{"get", "github.com/prismgo/framework@latest"}, Dir: target}); err != nil {
+		return err
+	}
 	if err := s.Runner.Run(ctx, run.Command{Name: "go", Args: []string{"mod", "tidy"}, Dir: target}); err != nil {
 		return err
 	}
@@ -92,7 +95,7 @@ func (s Service) initGit(ctx context.Context, target string, branch string) erro
 	commands := []run.Command{
 		{Name: "git", Args: []string{"init"}, Dir: target},
 		{Name: "git", Args: []string{"add", "."}, Dir: target},
-		{Name: "git", Args: []string{"commit", "-m", "Set up a fresh PrismGo app"}, Dir: target},
+		{Name: "git", Args: []string{"-c", "user.name=PrismGo Installer", "-c", "user.email=installer@prismgo.dev", "commit", "-m", "Set up a fresh PrismGo app"}, Dir: target},
 		{Name: "git", Args: []string{"branch", "-M", "--", branch}, Dir: target},
 	}
 	for _, command := range commands {

@@ -62,6 +62,7 @@ func TestCreateRunsDefaultSetupCommands(t *testing.T) {
 	}
 
 	want := []run.Command{
+		{Name: "go", Args: []string{"get", "github.com/prismgo/framework@latest"}, Dir: target},
 		{Name: "go", Args: []string{"mod", "tidy"}, Dir: target},
 		{Name: "go", Args: []string{"test", "./..."}, Dir: target},
 	}
@@ -92,11 +93,12 @@ func TestCreateWithGitRunsRepositoryInitializationAfterSetup(t *testing.T) {
 	}
 
 	want := []run.Command{
+		{Name: "go", Args: []string{"get", "github.com/prismgo/framework@latest"}, Dir: target},
 		{Name: "go", Args: []string{"mod", "tidy"}, Dir: target},
 		{Name: "go", Args: []string{"test", "./..."}, Dir: target},
 		{Name: "git", Args: []string{"init"}, Dir: target},
 		{Name: "git", Args: []string{"add", "."}, Dir: target},
-		{Name: "git", Args: []string{"commit", "-m", "Set up a fresh PrismGo app"}, Dir: target},
+		{Name: "git", Args: []string{"-c", "user.name=PrismGo Installer", "-c", "user.email=installer@prismgo.dev", "commit", "-m", "Set up a fresh PrismGo app"}, Dir: target},
 		{Name: "git", Args: []string{"branch", "-M", "--", "main"}, Dir: target},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
@@ -183,7 +185,7 @@ func TestCreateNoInstallWithGitRunsOnlyRepositoryInitialization(t *testing.T) {
 	want := []run.Command{
 		{Name: "git", Args: []string{"init"}, Dir: target},
 		{Name: "git", Args: []string{"add", "."}, Dir: target},
-		{Name: "git", Args: []string{"commit", "-m", "Set up a fresh PrismGo app"}, Dir: target},
+		{Name: "git", Args: []string{"-c", "user.name=PrismGo Installer", "-c", "user.email=installer@prismgo.dev", "commit", "-m", "Set up a fresh PrismGo app"}, Dir: target},
 		{Name: "git", Args: []string{"branch", "-M", "--", "main"}, Dir: target},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
@@ -308,7 +310,7 @@ func TestCreateReturnsSkeletonErrors(t *testing.T) {
 func TestCreateReturnsSetupCommandErrors(t *testing.T) {
 	// A failing setup command should be returned directly so callers can show the command output.
 	target := filepath.Join(t.TempDir(), "myapp")
-	wantErr := errors.New("go mod tidy failed")
+	wantErr := errors.New("go get failed")
 	runner := &recordingRunner{err: wantErr}
 	service := Service{
 		Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
@@ -326,7 +328,7 @@ func TestCreateReturnsSetupCommandErrors(t *testing.T) {
 		t.Fatalf("Create() error = %v, want %v", err, wantErr)
 	}
 	want := []run.Command{
-		{Name: "go", Args: []string{"mod", "tidy"}, Dir: target},
+		{Name: "go", Args: []string{"get", "github.com/prismgo/framework@latest"}, Dir: target},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
 		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)

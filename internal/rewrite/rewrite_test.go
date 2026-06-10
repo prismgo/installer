@@ -20,6 +20,30 @@ func TestReadModuleReadsPrismgoModule(t *testing.T) {
 	}
 }
 
+func TestReadModuleUnquotesQuotedModule(t *testing.T) {
+	path := writeFile(t, t.TempDir(), "go.mod", "module \"prismgo\" // app module\n\ngo 1.26.2\n")
+
+	module, err := ReadModule(path)
+	if err != nil {
+		t.Fatalf("expected quoted module to be read, got error: %v", err)
+	}
+	if module != "prismgo" {
+		t.Fatalf("expected module %q, got %q", "prismgo", module)
+	}
+}
+
+func TestReadModuleStopsUnquotedModuleAtImmediateComment(t *testing.T) {
+	path := writeFile(t, t.TempDir(), "go.mod", "module prismgo// app module\n\ngo 1.26.2\n")
+
+	module, err := ReadModule(path)
+	if err != nil {
+		t.Fatalf("expected module with immediate comment to be read, got error: %v", err)
+	}
+	if module != "prismgo" {
+		t.Fatalf("expected module %q, got %q", "prismgo", module)
+	}
+}
+
 func TestReadModuleFailsWhenDirectiveIsMissing(t *testing.T) {
 	// A go.mod without a module directive cannot be rewritten safely by later creation steps.
 	path := writeFile(t, t.TempDir(), "go.mod", "go 1.26.2\n")
@@ -57,6 +81,48 @@ func TestRewriteModuleOnlyChangesModuleDirective(t *testing.T) {
 	want := "module github.com/acme/myapp\n\nrequire github.com/prismgo/framework v0.0.0\n"
 	if got != want {
 		t.Fatalf("expected go.mod content:\n%s\ngot:\n%s", want, got)
+	}
+}
+
+func TestRewriteModulePreservesDirectiveComment(t *testing.T) {
+	path := writeFile(t, t.TempDir(), "go.mod", "module \"prismgo\" // app module\n\ngo 1.26.2\n")
+
+	if err := RewriteModule(path, "github.com/acme/myapp"); err != nil {
+		t.Fatalf("expected module rewrite to pass, got error: %v", err)
+	}
+
+	got := readFile(t, path)
+	want := "module github.com/acme/myapp // app module\n\ngo 1.26.2\n"
+	if got != want {
+		t.Fatalf("expected go.mod content:\n%s\ngot:\n%s", want, got)
+	}
+}
+
+func TestRewriteModulePreservesImmediateDirectiveComment(t *testing.T) {
+	path := writeFile(t, t.TempDir(), "go.mod", "module prismgo// app module\n\ngo 1.26.2\n")
+
+	if err := RewriteModule(path, "github.com/acme/myapp"); err != nil {
+		t.Fatalf("expected module rewrite to pass, got error: %v", err)
+	}
+
+	got := readFile(t, path)
+	want := "module github.com/acme/myapp// app module\n\ngo 1.26.2\n"
+	if got != want {
+		t.Fatalf("expected go.mod content:\n%s\ngot:\n%s", want, got)
+	}
+}
+
+func TestRewriteModulePreservesCRLFLineEnding(t *testing.T) {
+	path := writeFile(t, t.TempDir(), "go.mod", "module prismgo\r\n\r\ngo 1.26.2\r\n")
+
+	if err := RewriteModule(path, "github.com/acme/myapp"); err != nil {
+		t.Fatalf("expected module rewrite to pass, got error: %v", err)
+	}
+
+	got := readFile(t, path)
+	want := "module github.com/acme/myapp\r\n\r\ngo 1.26.2\r\n"
+	if got != want {
+		t.Fatalf("expected go.mod content %q, got %q", want, got)
 	}
 }
 
