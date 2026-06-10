@@ -82,8 +82,8 @@ func copyDirectory(ctx context.Context, source string, target string, mode os.Fi
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(target, mode); err != nil {
-		return fmt.Errorf("create target directory %q: %w", target, err)
+	if err := ensureTargetDirectory(target, mode); err != nil {
+		return err
 	}
 
 	entries, err := os.ReadDir(source)
@@ -91,6 +91,9 @@ func copyDirectory(ctx context.Context, source string, target string, mode os.Fi
 		return fmt.Errorf("read skeleton directory %q: %w", source, err)
 	}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if entry.Name() == ".git" && entry.IsDir() {
 			continue
 		}
@@ -113,7 +116,7 @@ func copyDirectory(ctx context.Context, source string, target string, mode os.Fi
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported non-regular skeleton file %q", sourcePath)
 		}
-		if err := copyFile(sourcePath, targetPath, info.Mode().Perm()); err != nil {
+		if err := copyFile(ctx, sourcePath, targetPath, info.Mode().Perm()); err != nil {
 			return err
 		}
 	}
@@ -123,31 +126,72 @@ func copyDirectory(ctx context.Context, source string, target string, mode os.Fi
 	return nil
 }
 
-func copyFile(source string, target string, mode os.FileMode) error {
+func ensureTargetDirectory(target string, mode os.FileMode) error {
+	info, err := os.Lstat(target)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("target directory already exists as symlink %q", target)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("target directory already exists as non-directory %q", target)
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect target directory %q: %w", target, err)
+	}
+	if err := os.MkdirAll(target, mode); err != nil {
+		return fmt.Errorf("create target directory %q: %w", target, err)
+	}
+	return nil
+}
+
+func copyFile(ctx context.Context, source string, target string, mode os.FileMode) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(target); err == nil {
+		return fmt.Errorf("target file already exists %q", target)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect target file %q: %w", target, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fmt.Errorf("create parent directory for %q: %w", target, err)
+	}
+
 	input, err := os.Open(source)
 	if err != nil {
 		return fmt.Errorf("open skeleton file %q: %w", source, err)
 	}
-	defer func() {
-		_ = input.Close()
-	}()
 
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return fmt.Errorf("create parent directory for %q: %w", target, err)
-	}
-	output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	// O_EXCL keeps destination creation atomic after the Lstat preflight rejects existing entries and symlinks.
+	output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
-		return fmt.Errorf("create target file %q: %w", target, err)
+		closeErr := closeFile(input, fmt.Sprintf("close skeleton file %q", source))
+		return errors.Join(fmt.Errorf("create target file %q: %w", target, err), closeErr)
 	}
-	defer func() {
-		_ = output.Close()
-	}()
 
 	if _, err := io.Copy(output, input); err != nil {
-		return fmt.Errorf("copy skeleton file %q to %q: %w", source, target, err)
+		copyErr := fmt.Errorf("copy skeleton file %q to %q: %w", source, target, err)
+		closeInputErr := closeFile(input, fmt.Sprintf("close skeleton file %q", source))
+		closeOutputErr := closeFile(output, fmt.Sprintf("close target file %q", target))
+		return errors.Join(copyErr, closeInputErr, closeOutputErr)
+	}
+	if err := closeFile(input, fmt.Sprintf("close skeleton file %q", source)); err != nil {
+		closeOutputErr := closeFile(output, fmt.Sprintf("close target file %q", target))
+		return errors.Join(err, closeOutputErr)
 	}
 	if err := output.Chmod(mode); err != nil {
-		return fmt.Errorf("chmod target file %q: %w", target, err)
+		closeErr := closeFile(output, fmt.Sprintf("close target file %q", target))
+		return errors.Join(fmt.Errorf("chmod target file %q: %w", target, err), closeErr)
+	}
+	return closeFile(output, fmt.Sprintf("close target file %q", target))
+}
+
+func closeFile(file *os.File, context string) error {
+	// Close can surface delayed write errors, so callers preserve it instead of relying on deferred cleanup.
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("%s: %w", context, err)
 	}
 	return nil
 }
