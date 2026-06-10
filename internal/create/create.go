@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 
 	"github.com/prismgo/installer/internal/project"
 	"github.com/prismgo/installer/internal/rewrite"
@@ -39,6 +40,14 @@ func (s Service) Create(ctx context.Context, opts Options) error {
 	if (!opts.NoInstall || opts.Git) && s.Runner == nil {
 		return errors.New("create command runner is required")
 	}
+	branch := opts.Branch
+	if opts.Git {
+		var err error
+		branch, err = normalizeBranch(branch)
+		if err != nil {
+			return err
+		}
+	}
 
 	target := opts.Project.Directory
 	if err := s.Skeleton.CopyTo(ctx, target); err != nil {
@@ -61,7 +70,7 @@ func (s Service) Create(ctx context.Context, opts Options) error {
 	}
 	if opts.NoInstall {
 		if opts.Git {
-			return s.initGit(ctx, target, opts.Branch)
+			return s.initGit(ctx, target, branch)
 		}
 		return nil
 	}
@@ -75,20 +84,16 @@ func (s Service) Create(ctx context.Context, opts Options) error {
 	if !opts.Git {
 		return nil
 	}
-	return s.initGit(ctx, target, opts.Branch)
+	return s.initGit(ctx, target, branch)
 }
 
 func (s Service) initGit(ctx context.Context, target string, branch string) error {
-	if branch == "" {
-		branch = "main"
-	}
-
 	// Keep the commands explicit so callers and tests can observe the same git lifecycle users expect.
 	commands := []run.Command{
 		{Name: "git", Args: []string{"init"}, Dir: target},
 		{Name: "git", Args: []string{"add", "."}, Dir: target},
 		{Name: "git", Args: []string{"commit", "-m", "Set up a fresh PrismGo app"}, Dir: target},
-		{Name: "git", Args: []string{"branch", "-M", branch}, Dir: target},
+		{Name: "git", Args: []string{"branch", "-M", "--", branch}, Dir: target},
 	}
 	for _, command := range commands {
 		if err := s.Runner.Run(ctx, command); err != nil {
@@ -96,4 +101,25 @@ func (s Service) initGit(ctx context.Context, target string, branch string) erro
 		}
 	}
 	return nil
+}
+
+func normalizeBranch(branch string) (string, error) {
+	if branch == "" {
+		return "main", nil
+	}
+	if strings.HasPrefix(branch, "-") {
+		return "", errors.New("git branch name must not start with '-'")
+	}
+	if strings.HasPrefix(branch, "/") || strings.HasSuffix(branch, "/") || strings.Contains(branch, "//") {
+		return "", errors.New("git branch name contains invalid slash placement")
+	}
+	if branch == "@" || strings.HasSuffix(branch, ".") || strings.HasSuffix(branch, ".lock") || strings.Contains(branch, "..") || strings.Contains(branch, "@{") {
+		return "", errors.New("git branch name contains invalid sequence")
+	}
+	for _, r := range branch {
+		if r <= ' ' || strings.ContainsRune(`~^:?*[\`, r) {
+			return "", errors.New("git branch name contains invalid character")
+		}
+	}
+	return branch, nil
 }

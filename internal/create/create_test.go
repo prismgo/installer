@@ -97,7 +97,7 @@ func TestCreateWithGitRunsRepositoryInitializationAfterSetup(t *testing.T) {
 		{Name: "git", Args: []string{"init"}, Dir: target},
 		{Name: "git", Args: []string{"add", "."}, Dir: target},
 		{Name: "git", Args: []string{"commit", "-m", "Set up a fresh PrismGo app"}, Dir: target},
-		{Name: "git", Args: []string{"branch", "-M", "main"}, Dir: target},
+		{Name: "git", Args: []string{"branch", "-M", "--", "main"}, Dir: target},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
 		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)
@@ -127,7 +127,7 @@ func TestCreateWithGitUsesRequestedBranch(t *testing.T) {
 	}
 
 	last := runner.commands[len(runner.commands)-1]
-	want := run.Command{Name: "git", Args: []string{"branch", "-M", "develop"}, Dir: target}
+	want := run.Command{Name: "git", Args: []string{"branch", "-M", "--", "develop"}, Dir: target}
 	if !reflect.DeepEqual(last, want) {
 		t.Fatalf("last recorded command = %#v, want %#v", last, want)
 	}
@@ -184,7 +184,7 @@ func TestCreateNoInstallWithGitRunsOnlyRepositoryInitialization(t *testing.T) {
 		{Name: "git", Args: []string{"init"}, Dir: target},
 		{Name: "git", Args: []string{"add", "."}, Dir: target},
 		{Name: "git", Args: []string{"commit", "-m", "Set up a fresh PrismGo app"}, Dir: target},
-		{Name: "git", Args: []string{"branch", "-M", "main"}, Dir: target},
+		{Name: "git", Args: []string{"branch", "-M", "--", "main"}, Dir: target},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
 		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)
@@ -238,6 +238,52 @@ func TestCreateRequiresRunnerWhenGitRuns(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "command runner is required") {
 		t.Fatalf("Create() error = %q, want command runner error", err.Error())
+	}
+}
+
+func TestCreateRejectsInvalidGitBranchBeforeCopy(t *testing.T) {
+	// Branch validation must happen before skeleton copy so invalid git input leaves no partial project.
+	target := filepath.Join(t.TempDir(), "myapp")
+	runner := &recordingRunner{}
+	err := (Service{Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")}, Runner: runner}).Create(context.Background(), Options{
+		Project: project.Plan{
+			Name:      "myapp",
+			Directory: target,
+			Module:    "github.com/acme/myapp",
+		},
+		Git:    true,
+		Branch: "--help",
+	})
+	if err == nil {
+		t.Fatal("Create() error = nil, want invalid branch error")
+	}
+	if !strings.Contains(err.Error(), "branch") {
+		t.Fatalf("Create() error = %q, want branch error", err.Error())
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("recorded commands = %#v, want none", runner.commands)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("target should not exist after invalid branch, stat error: %v", statErr)
+	}
+}
+
+func TestNormalizeBranchRejectsInvalidNames(t *testing.T) {
+	invalid := []string{"-bad", "/bad", "bad/", "bad//name", "bad..name", "bad.lock", "bad.", "@", "bad@{name", "bad name", "bad:name", "bad\\name"}
+	for _, branch := range invalid {
+		if _, err := normalizeBranch(branch); err == nil {
+			t.Fatalf("normalizeBranch(%q) error = nil, want error", branch)
+		}
+	}
+}
+
+func TestNormalizeBranchDefaultsEmptyToMain(t *testing.T) {
+	branch, err := normalizeBranch("")
+	if err != nil {
+		t.Fatalf("normalizeBranch empty error = %v", err)
+	}
+	if branch != "main" {
+		t.Fatalf("normalizeBranch empty = %q, want main", branch)
 	}
 }
 
