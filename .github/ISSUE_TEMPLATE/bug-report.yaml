@@ -1,0 +1,97 @@
+name: 缺陷报告
+description: 发现 Prismgo Lens 的异常行为时，请在这里报告。
+labels: ["type/bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        如果这是安全问题，请不要创建公开 issue。
+        请通过 GitHub Security Advisory 私下报告。
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先检查已有 issue，并确认你使用的是当前 Prismgo Lens 版本或提交。
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 描述问题，并附上有助于理解上下文的链接或说明。
+    validations:
+      required: true
+  - type: input
+    id: lens-version
+    attributes:
+      label: Lens 版本或提交
+      description: Prismgo Lens 版本号或提交引用。
+      placeholder: v0.0.0 or 5226a82
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: 执行命令
+      description: 触发问题的 prismgo-lens 命令或调用方式。
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: lens-area
+    attributes:
+      label: 涉及能力范围
+      description: 选择最接近的 Prismgo Lens 能力范围。
+      options:
+        - CLI
+        - MCP
+        - Agent 配置
+        - 宿主项目检测
+        - 文档搜索
+        - 浏览器日志
+        - 技能管理
+        - .prismgo-lens.json 配置
+        - 其他
+    validations:
+      required: true
+  - type: dropdown
+    id: can-reproduce
+    attributes:
+      label: 是否可以复现？
+      description: 如果可以，请在最小复现步骤中填写命令、配置或操作流程。
+      options:
+        - "是"
+        - "否"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 最小复现步骤
+      description: 提供能复现问题的最小命令、配置或操作步骤。
+      render: shell
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: 期望行为
+      description: 描述你期望发生的结果。
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: 实际行为
+      description: 描述实际发生的结果。
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或错误输出
+      description: 粘贴相关日志、panic 输出或命令输出。
+      render: shell
+  - type: input
+    id: go-version
+    attributes:
+      label: Go 版本
+      description: '`go version` 的输出。'
+      placeholder: go version go1.26.2 linux/amd64
+  - type: input
+    id: os-version
+    attributes:
+      label: 操作系统
+      description: 运行 Prismgo Lens 的操作系统和架构。
+      placeholder: Ubuntu 24.04 amd64
