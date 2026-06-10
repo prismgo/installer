@@ -18,6 +18,7 @@ help:
 	@echo "  make fmt-check  Check Go formatting when go.mod exists"
 	@echo "  make vet        Run go vet when go.mod exists"
 	@echo "  make test       Run Go tests when go.mod exists"
+	@echo "  make covdata    Generate Go coverage data when go.mod exists"
 	@echo "  make lint       Run golangci-lint when go.mod exists"
 	@echo "  make build      Build prismgo when cmd/prismgo exists"
 	@echo "  make install    Install prismgo when cmd/prismgo exists"
@@ -44,6 +45,14 @@ test:
 		echo "Skipping tests: go.mod is not present yet."; \
 	else \
 		$(GO) test -v $(PACKAGES); \
+	fi
+
+.PHONY: covdata
+covdata:
+	@if [ -z "$(HAS_GOMOD)" ]; then \
+		echo "Skipping coverage data: go.mod is not present yet."; \
+	else \
+		bash ./.github/scripts/coverage.sh $(PACKAGES); \
 	fi
 
 .PHONY: vet
