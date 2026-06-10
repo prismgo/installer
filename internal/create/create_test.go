@@ -70,6 +70,69 @@ func TestCreateRunsDefaultSetupCommands(t *testing.T) {
 	}
 }
 
+func TestCreateWithGitRunsRepositoryInitializationAfterSetup(t *testing.T) {
+	// Git initialization should run after dependency setup and verification so the first commit captures a ready app.
+	target := filepath.Join(t.TempDir(), "myapp")
+	runner := &recordingRunner{}
+	service := Service{
+		Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
+		Runner:   runner,
+	}
+
+	err := service.Create(context.Background(), Options{
+		Project: project.Plan{
+			Name:      "myapp",
+			Directory: target,
+			Module:    "github.com/acme/myapp",
+		},
+		Git: true,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	want := []run.Command{
+		{Name: "go", Args: []string{"mod", "tidy"}, Dir: target},
+		{Name: "go", Args: []string{"test", "./..."}, Dir: target},
+		{Name: "git", Args: []string{"init"}, Dir: target},
+		{Name: "git", Args: []string{"add", "."}, Dir: target},
+		{Name: "git", Args: []string{"commit", "-m", "Set up a fresh PrismGo app"}, Dir: target},
+		{Name: "git", Args: []string{"branch", "-M", "main"}, Dir: target},
+	}
+	if !reflect.DeepEqual(runner.commands, want) {
+		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)
+	}
+}
+
+func TestCreateWithGitUsesRequestedBranch(t *testing.T) {
+	// A requested branch name should replace the default initial branch rename.
+	target := filepath.Join(t.TempDir(), "myapp")
+	runner := &recordingRunner{}
+	service := Service{
+		Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
+		Runner:   runner,
+	}
+
+	err := service.Create(context.Background(), Options{
+		Project: project.Plan{
+			Name:      "myapp",
+			Directory: target,
+			Module:    "github.com/acme/myapp",
+		},
+		Git:    true,
+		Branch: "develop",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	last := runner.commands[len(runner.commands)-1]
+	want := run.Command{Name: "git", Args: []string{"branch", "-M", "develop"}, Dir: target}
+	if !reflect.DeepEqual(last, want) {
+		t.Fatalf("last recorded command = %#v, want %#v", last, want)
+	}
+}
+
 func TestCreateNoInstallSkipsSetupCommands(t *testing.T) {
 	// --no-install keeps generation filesystem-only for offline or deferred dependency setup.
 	target := filepath.Join(t.TempDir(), "myapp")
@@ -92,6 +155,39 @@ func TestCreateNoInstallSkipsSetupCommands(t *testing.T) {
 	}
 	if len(runner.commands) != 0 {
 		t.Fatalf("recorded commands = %#v, want none", runner.commands)
+	}
+}
+
+func TestCreateNoInstallWithGitRunsOnlyRepositoryInitialization(t *testing.T) {
+	// When install is skipped, git initialization should still commit the rewritten project files.
+	target := filepath.Join(t.TempDir(), "myapp")
+	runner := &recordingRunner{}
+	service := Service{
+		Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
+		Runner:   runner,
+	}
+
+	err := service.Create(context.Background(), Options{
+		Project: project.Plan{
+			Name:      "myapp",
+			Directory: target,
+			Module:    "github.com/acme/myapp",
+		},
+		NoInstall: true,
+		Git:       true,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	want := []run.Command{
+		{Name: "git", Args: []string{"init"}, Dir: target},
+		{Name: "git", Args: []string{"add", "."}, Dir: target},
+		{Name: "git", Args: []string{"commit", "-m", "Set up a fresh PrismGo app"}, Dir: target},
+		{Name: "git", Args: []string{"branch", "-M", "main"}, Dir: target},
+	}
+	if !reflect.DeepEqual(runner.commands, want) {
+		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)
 	}
 }
 
@@ -118,6 +214,24 @@ func TestCreateRequiresRunnerWhenInstallRuns(t *testing.T) {
 			Directory: filepath.Join(t.TempDir(), "myapp"),
 			Module:    "github.com/acme/myapp",
 		},
+	})
+	if err == nil {
+		t.Fatal("Create() error = nil, want command runner error")
+	}
+	if !strings.Contains(err.Error(), "command runner is required") {
+		t.Fatalf("Create() error = %q, want command runner error", err.Error())
+	}
+}
+
+func TestCreateRequiresRunnerWhenGitRuns(t *testing.T) {
+	// Git initialization also needs the command runner even when dependency setup is skipped.
+	err := (Service{Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")}}).Create(context.Background(), Options{
+		Project: project.Plan{
+			Directory: filepath.Join(t.TempDir(), "myapp"),
+			Module:    "github.com/acme/myapp",
+		},
+		NoInstall: true,
+		Git:       true,
 	})
 	if err == nil {
 		t.Fatal("Create() error = nil, want command runner error")
@@ -167,6 +281,36 @@ func TestCreateReturnsSetupCommandErrors(t *testing.T) {
 	}
 	want := []run.Command{
 		{Name: "go", Args: []string{"mod", "tidy"}, Dir: target},
+	}
+	if !reflect.DeepEqual(runner.commands, want) {
+		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)
+	}
+}
+
+func TestCreateReturnsGitCommandErrors(t *testing.T) {
+	// A failing git command should stop the repository setup and return the runner error.
+	target := filepath.Join(t.TempDir(), "myapp")
+	wantErr := errors.New("git init failed")
+	runner := &recordingRunner{err: wantErr}
+	service := Service{
+		Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
+		Runner:   runner,
+	}
+
+	err := service.Create(context.Background(), Options{
+		Project: project.Plan{
+			Name:      "myapp",
+			Directory: target,
+			Module:    "github.com/acme/myapp",
+		},
+		NoInstall: true,
+		Git:       true,
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Create() error = %v, want %v", err, wantErr)
+	}
+	want := []run.Command{
+		{Name: "git", Args: []string{"init"}, Dir: target},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
 		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)

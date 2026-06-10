@@ -17,9 +17,9 @@ type Options struct {
 	Project project.Plan
 	// NoInstall skips dependency resolution and project test execution.
 	NoInstall bool
-	// Git is preserved for Task 6, where repository initialization is implemented.
+	// Git initializes a local repository in the generated application.
 	Git bool
-	// Branch is preserved for Task 6, where repository initialization is implemented.
+	// Branch sets the initial git branch name; empty defaults to main.
 	Branch string
 }
 
@@ -36,7 +36,7 @@ func (s Service) Create(ctx context.Context, opts Options) error {
 	if s.Skeleton == nil {
 		return errors.New("create skeleton source is required")
 	}
-	if !opts.NoInstall && s.Runner == nil {
+	if (!opts.NoInstall || opts.Git) && s.Runner == nil {
 		return errors.New("create command runner is required")
 	}
 
@@ -60,11 +60,40 @@ func (s Service) Create(ctx context.Context, opts Options) error {
 		return err
 	}
 	if opts.NoInstall {
+		if opts.Git {
+			return s.initGit(ctx, target, opts.Branch)
+		}
 		return nil
 	}
 
 	if err := s.Runner.Run(ctx, run.Command{Name: "go", Args: []string{"mod", "tidy"}, Dir: target}); err != nil {
 		return err
 	}
-	return s.Runner.Run(ctx, run.Command{Name: "go", Args: []string{"test", "./..."}, Dir: target})
+	if err := s.Runner.Run(ctx, run.Command{Name: "go", Args: []string{"test", "./..."}, Dir: target}); err != nil {
+		return err
+	}
+	if !opts.Git {
+		return nil
+	}
+	return s.initGit(ctx, target, opts.Branch)
+}
+
+func (s Service) initGit(ctx context.Context, target string, branch string) error {
+	if branch == "" {
+		branch = "main"
+	}
+
+	// Keep the commands explicit so callers and tests can observe the same git lifecycle users expect.
+	commands := []run.Command{
+		{Name: "git", Args: []string{"init"}, Dir: target},
+		{Name: "git", Args: []string{"add", "."}, Dir: target},
+		{Name: "git", Args: []string{"commit", "-m", "Set up a fresh PrismGo app"}, Dir: target},
+		{Name: "git", Args: []string{"branch", "-M", branch}, Dir: target},
+	}
+	for _, command := range commands {
+		if err := s.Runner.Run(ctx, command); err != nil {
+			return err
+		}
+	}
+	return nil
 }
