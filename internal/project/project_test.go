@@ -121,6 +121,23 @@ func TestResolveUsesProcessWorkingDirectoryWhenCWDIsEmpty(t *testing.T) {
 	}
 }
 
+func TestResolveAcceptsRelativeCWD(t *testing.T) {
+	// Relative CWD values are normalized so callers can pass process-relative base directories.
+	parent := t.TempDir()
+	t.Chdir(parent)
+	if err := os.Mkdir("workspace", 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	plan, err := Resolve(Options{CWD: "workspace", Name: "myapp"})
+	if err != nil {
+		t.Fatalf("expected project plan, got error: %v", err)
+	}
+	if plan.Directory != filepath.Join(parent, "workspace", "myapp") {
+		t.Fatalf("expected directory %q, got %q", filepath.Join(parent, "workspace", "myapp"), plan.Directory)
+	}
+}
+
 func TestResolveExistingDirectoryWithoutForceFails(t *testing.T) {
 	// Existing targets are refused unless --force is set and the directory is empty.
 	cwd := t.TempDir()
@@ -144,6 +161,59 @@ func TestResolveExistingFileFails(t *testing.T) {
 	_, err := Resolve(Options{CWD: cwd, Name: "myapp", Force: true})
 	if err == nil {
 		t.Fatal("expected existing file to fail")
+	}
+}
+
+func TestResolveExistingTargetSymlinkWithForceFails(t *testing.T) {
+	// A symlink target could point outside the validated directory boundary and must never be reused.
+	cwd := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(cwd, "myapp")); err != nil {
+		t.Fatalf("create target symlink: %v", err)
+	}
+
+	_, err := Resolve(Options{CWD: cwd, Name: "myapp", Force: true})
+	if err == nil {
+		t.Fatal("expected existing target symlink with force to fail")
+	}
+}
+
+func TestResolveSymlinkedParentComponentFails(t *testing.T) {
+	// A symlinked parent would make later creation write through the link rather than under CWD.
+	cwd := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(cwd, "link")); err != nil {
+		t.Fatalf("create parent symlink: %v", err)
+	}
+
+	_, err := Resolve(Options{CWD: cwd, Name: "link/app"})
+	if err == nil {
+		t.Fatal("expected symlinked parent component to fail")
+	}
+}
+
+func TestRejectSymlinkedParentComponentsAllowsTargetInsideCWD(t *testing.T) {
+	// A direct child target has no parent component below CWD to inspect.
+	cwd := t.TempDir()
+	if err := rejectSymlinkedParentComponents(cwd, filepath.Join(cwd, "myapp")); err != nil {
+		t.Fatalf("expected direct child target to pass, got error: %v", err)
+	}
+}
+
+func TestRejectSymlinkedParentComponentsAllowsCWDTarget(t *testing.T) {
+	// The helper is defensive for callers that pass CWD itself as the target.
+	cwd := t.TempDir()
+	if err := rejectSymlinkedParentComponents(cwd, cwd); err != nil {
+		t.Fatalf("expected cwd target to pass, got error: %v", err)
+	}
+}
+
+func TestRejectSymlinkedParentComponentsAllowsMissingParent(t *testing.T) {
+	// Missing parents are safe at this stage because later creation owns creating new directories.
+	cwd := t.TempDir()
+	target := filepath.Join(cwd, "missing", "myapp")
+	if err := rejectSymlinkedParentComponents(cwd, target); err != nil {
+		t.Fatalf("expected missing parent to pass, got error: %v", err)
 	}
 }
 

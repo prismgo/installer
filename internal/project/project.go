@@ -51,7 +51,7 @@ func Resolve(opts Options) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	if err := validateTarget(target, opts.Force); err != nil {
+	if err := validateTarget(cwd, target, opts.Force); err != nil {
 		return Plan{}, err
 	}
 
@@ -138,14 +138,21 @@ func resolveTarget(cwd string, directoryName string) (string, error) {
 	return target, nil
 }
 
-func validateTarget(target string, force bool) error {
+func validateTarget(cwd string, target string, force bool) error {
 	// Missing targets are safe for later creation; existing targets must pass the --force rules below.
-	info, err := os.Stat(target)
+	if err := rejectSymlinkedParentComponents(cwd, target); err != nil {
+		return err
+	}
+
+	info, err := os.Lstat(target)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return fmt.Errorf("inspect target directory %q: %w", target, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("target path %q is a symlink", target)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("target path %q already exists and is not a directory", target)
@@ -160,6 +167,37 @@ func validateTarget(target string, force bool) error {
 	}
 	if len(entries) > 0 {
 		return fmt.Errorf("target directory %q is not empty", target)
+	}
+	return nil
+}
+
+func rejectSymlinkedParentComponents(cwd string, target string) error {
+	rel, err := filepath.Rel(cwd, target)
+	if err != nil {
+		return fmt.Errorf("resolve target directory %q: %w", target, err)
+	}
+	if rel == "." {
+		return nil
+	}
+
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) == 1 {
+		return nil
+	}
+
+	current := cwd
+	for _, part := range parts[:len(parts)-1] {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf("inspect target path component %q: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("target path component %q is a symlink", current)
+		}
 	}
 	return nil
 }

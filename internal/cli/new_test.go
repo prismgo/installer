@@ -8,6 +8,8 @@ import (
 
 func TestExecuteNewReturnsNotImplementedErrorWithProjectName(t *testing.T) {
 	// Execute should parse the project name before returning the Task 1 placeholder error.
+	t.Chdir(t.TempDir())
+
 	err := Execute(context.Background(), []string{"new", "myapp"})
 	if err == nil {
 		t.Fatal("expected not implemented error, got nil")
@@ -22,6 +24,8 @@ func TestExecuteNewReturnsNotImplementedErrorWithProjectName(t *testing.T) {
 
 func TestExecuteNewModulePathReturnsNotImplementedErrorWithDirectoryName(t *testing.T) {
 	// Module-path input should resolve successfully and preserve the Task 1 placeholder with the local directory name.
+	t.Chdir(t.TempDir())
+
 	err := Execute(context.Background(), []string{"new", "github.com/acme/myapp"})
 	if err == nil {
 		t.Fatal("expected not implemented error, got nil")
