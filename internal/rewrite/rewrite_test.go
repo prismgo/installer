@@ -92,8 +92,66 @@ func TestRewriteModuleFailsWhenFileIsMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing go.mod to fail")
 	}
+	if !strings.Contains(err.Error(), "inspect go.mod") {
+		t.Fatalf("expected inspect error, got %q", err.Error())
+	}
+}
+
+func TestRewriteModuleFailsWhenPathIsDirectory(t *testing.T) {
+	// A directory named go.mod passes Lstat but must fail when read as a module file.
+	path := filepath.Join(t.TempDir(), "go.mod")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("create go.mod directory: %v", err)
+	}
+
+	err := RewriteModule(path, "github.com/acme/myapp")
+	if err == nil {
+		t.Fatal("expected go.mod directory rewrite to fail")
+	}
 	if !strings.Contains(err.Error(), "read go.mod") {
 		t.Fatalf("expected read error, got %q", err.Error())
+	}
+}
+
+func TestRewriteModuleReturnsWriteError(t *testing.T) {
+	// Read-only go.mod files should surface write errors instead of ignoring failed rewrites.
+	path := writeFile(t, t.TempDir(), "go.mod", "module prismgo\n")
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatalf("make go.mod read-only: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Fatalf("restore go.mod permissions: %v", err)
+		}
+	})
+
+	err := RewriteModule(path, "github.com/acme/myapp")
+	if err == nil {
+		t.Skip("filesystem permits writing to read-only owner files")
+	}
+	if !strings.Contains(err.Error(), "write go.mod") {
+		t.Fatalf("expected write error, got %q", err.Error())
+	}
+}
+
+func TestRewriteModuleRejectsSymlinkedGoMod(t *testing.T) {
+	// Symlinked go.mod files must not be followed because rewriting through them can modify files outside the project.
+	dir := t.TempDir()
+	outside := writeFile(t, t.TempDir(), "go.mod", "module outside\n")
+	linkPath := filepath.Join(dir, "go.mod")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Fatalf("create go.mod symlink: %v", err)
+	}
+
+	err := RewriteModule(linkPath, "github.com/acme/myapp")
+	if err == nil {
+		t.Fatal("expected symlinked go.mod to fail")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %q", err.Error())
+	}
+	if got := readFile(t, outside); got != "module outside\n" {
+		t.Fatalf("expected outside go.mod to remain unchanged, got %q", got)
 	}
 }
 
@@ -138,6 +196,32 @@ func TestRewriteImportsFailsWhenRootIsMissing(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "walk") {
 		t.Fatalf("expected walk error, got %q", err.Error())
+	}
+}
+
+func TestRewriteImportsRejectsSymlinkedGoFile(t *testing.T) {
+	// Symlinked .go files inside root must not be parsed and rewritten through to files outside root.
+	dir := t.TempDir()
+	outside := writeFile(t, t.TempDir(), "outside.go", `package main
+
+import "prismgo/bootstrap"
+
+func main() {}
+`)
+	linkPath := filepath.Join(dir, "main.go")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Fatalf("create Go file symlink: %v", err)
+	}
+
+	err := RewriteImports(dir, "prismgo", "github.com/acme/myapp")
+	if err == nil {
+		t.Fatal("expected symlinked Go file to fail")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %q", err.Error())
+	}
+	if got := readFile(t, outside); !strings.Contains(got, `"prismgo/bootstrap"`) {
+		t.Fatalf("expected outside Go file to remain unchanged, got:\n%s", got)
 	}
 }
 
@@ -236,6 +320,40 @@ func TestRewriteImportsReturnsParseErrorForInvalidGoFile(t *testing.T) {
 	}
 }
 
+func TestRewriteGoFileImportsRejectsDirectSymlink(t *testing.T) {
+	// The file-level helper rechecks symlinks defensively in case callers bypass the directory walk.
+	dir := t.TempDir()
+	outside := writeFile(t, t.TempDir(), "outside.go", `package main
+
+import "prismgo/bootstrap"
+
+func main() {}
+`)
+	linkPath := filepath.Join(dir, "main.go")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Fatalf("create Go file symlink: %v", err)
+	}
+
+	err := rewriteGoFileImports(linkPath, "prismgo", "github.com/acme/myapp")
+	if err == nil {
+		t.Fatal("expected direct symlinked Go file rewrite to fail")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %q", err.Error())
+	}
+}
+
+func TestRewriteGoFileImportsFailsWhenFileIsMissing(t *testing.T) {
+	// The file-level helper should return inspect errors before parsing missing paths.
+	err := rewriteGoFileImports(filepath.Join(t.TempDir(), "missing.go"), "prismgo", "github.com/acme/myapp")
+	if err == nil {
+		t.Fatal("expected missing Go file rewrite to fail")
+	}
+	if !strings.Contains(err.Error(), "inspect Go file") {
+		t.Fatalf("expected inspect error, got %q", err.Error())
+	}
+}
+
 func TestInitEnvSkipsWhenExampleIsMissing(t *testing.T) {
 	// Missing .env.example means there is nothing to initialize, so InitEnv should be a no-op.
 	dir := t.TempDir()
@@ -245,6 +363,19 @@ func TestInitEnvSkipsWhenExampleIsMissing(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".env")); !os.IsNotExist(err) {
 		t.Fatalf("expected .env to remain absent, got stat error: %v", err)
+	}
+}
+
+func TestWriteNewFileFailsWhenTargetExists(t *testing.T) {
+	// Exclusive create semantics should refuse existing paths created between checks.
+	path := writeFile(t, t.TempDir(), ".env", "APP_NAME=Existing\n")
+
+	err := writeNewFile(path, []byte("APP_NAME=PrismGo\n"), 0o644)
+	if err == nil {
+		t.Fatal("expected exclusive write to existing file to fail")
+	}
+	if got := readFile(t, path); got != "APP_NAME=Existing\n" {
+		t.Fatalf("expected existing file to remain unchanged, got %q", got)
 	}
 }
 
@@ -260,8 +391,28 @@ func TestInitEnvFailsWhenExampleCannotBeInspected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected symlink loop to fail")
 	}
-	if !strings.Contains(err.Error(), "inspect env example") {
-		t.Fatalf("expected env example inspect error, got %q", err.Error())
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected env example symlink error, got %q", err.Error())
+	}
+}
+
+func TestInitEnvRejectsSymlinkedEnvExample(t *testing.T) {
+	// Symlinked .env.example files must not be followed because they can copy outside content into .env.
+	dir := t.TempDir()
+	outside := writeFile(t, t.TempDir(), "secret.env", "SECRET=outside\n")
+	if err := os.Symlink(outside, filepath.Join(dir, ".env.example")); err != nil {
+		t.Fatalf("create .env.example symlink: %v", err)
+	}
+
+	err := InitEnv(dir)
+	if err == nil {
+		t.Fatal("expected symlinked .env.example to fail")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %q", err.Error())
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("expected .env to remain absent, got stat error: %v", err)
 	}
 }
 
@@ -288,6 +439,48 @@ func TestInitEnvCopiesExampleOnlyWhenEnvMissing(t *testing.T) {
 	}
 }
 
+func TestInitEnvRejectsSymlinkedEnv(t *testing.T) {
+	// Existing .env symlinks must not be followed or overwritten by initialization.
+	dir := t.TempDir()
+	writeFile(t, dir, ".env.example", "APP_NAME=PrismGo\n")
+	outside := writeFile(t, t.TempDir(), "outside.env", "APP_NAME=Outside\n")
+	if err := os.Symlink(outside, filepath.Join(dir, ".env")); err != nil {
+		t.Fatalf("create .env symlink: %v", err)
+	}
+
+	err := InitEnv(dir)
+	if err == nil {
+		t.Fatal("expected symlinked .env to fail")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %q", err.Error())
+	}
+	if got := readFile(t, outside); got != "APP_NAME=Outside\n" {
+		t.Fatalf("expected outside .env target to remain unchanged, got %q", got)
+	}
+}
+
+func TestInitEnvRejectsDanglingSymlinkedEnv(t *testing.T) {
+	// Dangling .env symlinks must not be treated as missing because writes would create the outside target.
+	dir := t.TempDir()
+	writeFile(t, dir, ".env.example", "APP_NAME=PrismGo\n")
+	outside := filepath.Join(t.TempDir(), "outside.env")
+	if err := os.Symlink(outside, filepath.Join(dir, ".env")); err != nil {
+		t.Fatalf("create dangling .env symlink: %v", err)
+	}
+
+	err := InitEnv(dir)
+	if err == nil {
+		t.Fatal("expected dangling symlinked .env to fail")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %q", err.Error())
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatalf("expected outside target to remain absent, got stat error: %v", err)
+	}
+}
+
 func TestInitEnvFailsWhenEnvCannotBeInspected(t *testing.T) {
 	// A symlink loop at .env should return a stat error so callers know initialization is unsafe.
 	dir := t.TempDir()
@@ -301,8 +494,8 @@ func TestInitEnvFailsWhenEnvCannotBeInspected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected .env symlink loop to fail")
 	}
-	if !strings.Contains(err.Error(), "inspect env file") {
-		t.Fatalf("expected env inspect error, got %q", err.Error())
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected env symlink error, got %q", err.Error())
 	}
 }
 

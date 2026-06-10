@@ -24,6 +24,14 @@ func ReadModule(path string) (string, error) {
 
 // RewriteModule changes only the module directive line and leaves the rest of go.mod unchanged.
 func RewriteModule(path string, module string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect go.mod %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("go.mod %q is a symlink", path)
+	}
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read go.mod %q: %w", path, err)
