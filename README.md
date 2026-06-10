@@ -10,6 +10,12 @@ prismgo new myapp
 
 ## 安装
 
+前置要求：
+
+- Go 工具链，用于安装 installer，并在默认创建流程中运行 `go mod tidy` 和 `go test ./...`
+- Git，用于拉取 `github.com/prismgo/prismgo` 应用骨架；即使不使用 `--git`，创建项目也需要 Git
+- 能访问 GitHub 的网络环境
+
 使用 Go 工具链安装：
 
 ```bash
@@ -61,6 +67,8 @@ prismgo new myapp --module github.com/acme/service
 ```bash
 prismgo new myapp --no-install
 ```
+
+`--no-install` 只跳过 `go mod tidy` 和 `go test ./...`。它不会跳过 skeleton 获取，仍然需要 Git 和 GitHub 访问。
 
 初始化本地 Git 仓库：
 
