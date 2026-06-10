@@ -97,6 +97,26 @@ func TestRewriteModuleFailsWhenFileIsMissing(t *testing.T) {
 	}
 }
 
+func TestRewriteModulePreservesFilePermissions(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "go.mod", "module prismgo\n")
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatalf("chmod go.mod: %v", err)
+	}
+
+	if err := RewriteModule(path, "github.com/acme/myapp"); err != nil {
+		t.Fatalf("expected module rewrite to pass, got error: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat go.mod: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("expected permissions 0600, got %v", got)
+	}
+}
+
 func TestRewriteModuleFailsWhenPathIsDirectory(t *testing.T) {
 	// A directory named go.mod passes Lstat but must fail when read as a module file.
 	path := filepath.Join(t.TempDir(), "go.mod")
@@ -317,6 +337,74 @@ func TestRewriteImportsReturnsParseErrorForInvalidGoFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse") || !strings.Contains(err.Error(), "broken.go") {
 		t.Fatalf("expected parse error to name the file, got %q", err.Error())
+	}
+}
+
+func TestRewriteImportsPreservesFilePermissions(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "main.go", `package main
+
+import "prismgo/bootstrap"
+
+func main() {}
+`)
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatalf("chmod Go file: %v", err)
+	}
+
+	if err := RewriteImports(dir, "prismgo", "github.com/acme/myapp"); err != nil {
+		t.Fatalf("expected import rewrite to pass, got error: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat Go file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("expected permissions 0600, got %v", got)
+	}
+}
+
+func TestSafeReplaceFileRejectsChangedTargetBeforeReplace(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "go.mod", "module prismgo\n")
+
+	err := safeReplaceFileWithHook(path, []byte("module github.com/acme/myapp\n"), func() error {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		return os.Mkdir(path, 0o755)
+	})
+	if err == nil {
+		t.Fatal("expected changed target to fail")
+	}
+	if !strings.Contains(err.Error(), "changed while preparing rewrite") && !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("expected changed target error, got %q", err.Error())
+	}
+	if info, statErr := os.Stat(path); statErr != nil || !info.IsDir() {
+		t.Fatalf("expected replacement directory to remain untouched, info=%v err=%v", info, statErr)
+	}
+}
+
+func TestSafeReplaceFileRejectsSymlinkSwappedBeforeReplace(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "go.mod", "module prismgo\n")
+	outside := writeFile(t, t.TempDir(), "outside.mod", "module outside\n")
+
+	err := safeReplaceFileWithHook(path, []byte("module github.com/acme/myapp\n"), func() error {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		return os.Symlink(outside, path)
+	})
+	if err == nil {
+		t.Fatal("expected symlink swap to fail")
+	}
+	if !strings.Contains(err.Error(), "is a symlink") {
+		t.Fatalf("expected symlink error, got %q", err.Error())
+	}
+	if got := readFile(t, outside); got != "module outside\n" {
+		t.Fatalf("expected outside file to remain untouched, got %q", got)
 	}
 }
 

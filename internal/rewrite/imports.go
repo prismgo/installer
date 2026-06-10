@@ -83,7 +83,7 @@ func rewriteGoFileImports(path string, oldModule string, newModule string) error
 	if info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("rewrite imports %q: symlinked Go files are not supported", path)
 	}
-	if err := os.WriteFile(path, formatted.Bytes(), 0o644); err != nil {
+	if err := safeReplaceFile(path, formatted.Bytes()); err != nil {
 		return fmt.Errorf("write Go file %q: %w", path, err)
 	}
 	return nil

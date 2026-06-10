@@ -48,7 +48,7 @@ func RewriteModule(path string, module string) error {
 			// Preserve the original line ending while replacing only the directive payload.
 			lineEnding := strings.TrimPrefix(line, text)
 			lines[i] = "module " + module + lineEnding
-			if err := os.WriteFile(path, []byte(strings.Join(lines, "")), 0o644); err != nil {
+			if err := safeReplaceFile(path, []byte(strings.Join(lines, ""))); err != nil {
 				return fmt.Errorf("write go.mod %q: %w", path, err)
 			}
 			return nil
