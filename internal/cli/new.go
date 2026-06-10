@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"context"
 	"errors"
-	"fmt"
 
+	"github.com/prismgo/installer/internal/create"
 	"github.com/prismgo/installer/internal/project"
+	"github.com/prismgo/installer/internal/run"
+	"github.com/prismgo/installer/internal/skeleton"
 	"github.com/spf13/cobra"
 )
 
@@ -18,8 +21,20 @@ type newOptions struct {
 	github    bool
 }
 
-// NewCommand defines the initial `prismgo new` surface before project creation is implemented.
+type creator interface {
+	Create(context.Context, create.Options) error
+}
+
+// NewCommand defines the `prismgo new` surface and delegates creation to the create service.
 func NewCommand() *cobra.Command {
+	runner := run.OSRunner{}
+	return newCommandWithCreator(create.Service{
+		Skeleton: skeleton.GitHubSource{Runner: runner},
+		Runner:   runner,
+	})
+}
+
+func newCommandWithCreator(creator creator) *cobra.Command {
 	opts := newOptions{}
 
 	cmd := &cobra.Command{
@@ -31,7 +46,7 @@ func NewCommand() *cobra.Command {
 			if opts.github {
 				return errors.New("github repository creation is not supported yet")
 			}
-			// Resolve validates the target before later tasks perform any filesystem creation.
+			// Resolve validates the target before the create service writes skeleton files.
 			plan, err := project.Resolve(project.Options{
 				Name:   args[0],
 				Module: opts.module,
@@ -40,7 +55,12 @@ func NewCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return fmt.Errorf("prismgo new %q is not implemented yet", plan.Name)
+			return creator.Create(cmd.Context(), create.Options{
+				Project:   plan,
+				NoInstall: opts.noInstall,
+				Git:       opts.git,
+				Branch:    opts.branch,
+			})
 		},
 	}
 

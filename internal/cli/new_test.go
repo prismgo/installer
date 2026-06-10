@@ -2,39 +2,61 @@ package cli
 
 import (
 	"context"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/prismgo/installer/internal/create"
+	"github.com/prismgo/installer/internal/project"
 )
 
-func TestExecuteNewReturnsNotImplementedErrorWithProjectName(t *testing.T) {
-	// Execute should parse the project name before returning the Task 1 placeholder error.
-	t.Chdir(t.TempDir())
+func TestNewCommandCallsCreateService(t *testing.T) {
+	// The CLI should stay thin: parse flags, resolve the project, then pass creation options through.
+	cwd := t.TempDir()
+	creator := &recordingCreator{}
+	cmd := newCommandWithCreator(creator)
+	cmd.SetArgs([]string{"myapp", "--module", "github.com/acme/myapp", "--no-install", "--git", "--branch", "develop"})
 
-	err := Execute(context.Background(), []string{"new", "myapp"})
-	if err == nil {
-		t.Fatal("expected not implemented error, got nil")
+	err := runCommandInDir(t, cwd, cmd)
+	if err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("expected not implemented error, got %q", err.Error())
+
+	want := create.Options{
+		Project: project.Plan{
+			Name:      "myapp",
+			Directory: filepath.Join(cwd, "myapp"),
+			Module:    "github.com/acme/myapp",
+		},
+		NoInstall: true,
+		Git:       true,
+		Branch:    "develop",
 	}
-	if !strings.Contains(err.Error(), "myapp") {
-		t.Fatalf("expected error to include project name, got %q", err.Error())
+	if !reflect.DeepEqual(creator.options, want) {
+		t.Fatalf("Create() options = %#v, want %#v", creator.options, want)
+	}
+	if creator.calls != 1 {
+		t.Fatalf("Create() calls = %d, want 1", creator.calls)
 	}
 }
 
-func TestExecuteNewModulePathReturnsNotImplementedErrorWithDirectoryName(t *testing.T) {
-	// Module-path input should resolve successfully and preserve the Task 1 placeholder with the local directory name.
-	t.Chdir(t.TempDir())
+func TestNewCommandModulePathResolvesDirectoryName(t *testing.T) {
+	// Module-path input keeps the full module while using the final path segment as the local directory.
+	cwd := t.TempDir()
+	creator := &recordingCreator{}
+	cmd := newCommandWithCreator(creator)
+	cmd.SetArgs([]string{"github.com/acme/myapp", "--no-install"})
 
-	err := Execute(context.Background(), []string{"new", "github.com/acme/myapp"})
-	if err == nil {
-		t.Fatal("expected not implemented error, got nil")
+	err := runCommandInDir(t, cwd, cmd)
+	if err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("expected not implemented error, got %q", err.Error())
+	if creator.options.Project.Name != "myapp" {
+		t.Fatalf("project name = %q, want %q", creator.options.Project.Name, "myapp")
 	}
-	if !strings.Contains(err.Error(), "myapp") {
-		t.Fatalf("expected error to include resolved directory name, got %q", err.Error())
+	if creator.options.Project.Module != "github.com/acme/myapp" {
+		t.Fatalf("project module = %q, want %q", creator.options.Project.Module, "github.com/acme/myapp")
 	}
 }
 
@@ -93,6 +115,27 @@ func TestNewCommandRegistersExpectedFlags(t *testing.T) {
 	if branch.DefValue != "main" {
 		t.Fatalf("expected branch default %q, got %q", "main", branch.DefValue)
 	}
+}
+
+type recordingCreator struct {
+	calls   int
+	options create.Options
+}
+
+func (r *recordingCreator) Create(_ context.Context, opts create.Options) error {
+	// Store the exact options passed by the CLI so tests cover flag propagation and project resolution together.
+	r.calls++
+	r.options = opts
+	return nil
+}
+
+func runCommandInDir(t *testing.T, dir string, cmd interface {
+	ExecuteContext(context.Context) error
+}) error {
+	t.Helper()
+
+	t.Chdir(dir)
+	return cmd.ExecuteContext(context.Background())
 }
 
 func TestRootCommandHelpExecutesWithoutError(t *testing.T) {
