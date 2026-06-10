@@ -46,6 +46,9 @@ func newCommandWithCreator(creator creator) *cobra.Command {
 			if opts.github {
 				return errors.New("github repository creation is not supported yet")
 			}
+			if opts.git {
+				return errors.New("git initialization is not supported yet")
+			}
 			// Resolve validates the target before the create service writes skeleton files.
 			plan, err := project.Resolve(project.Options{
 				Name:   args[0],

@@ -16,7 +16,7 @@ func TestNewCommandCallsCreateService(t *testing.T) {
 	cwd := t.TempDir()
 	creator := &recordingCreator{}
 	cmd := newCommandWithCreator(creator)
-	cmd.SetArgs([]string{"myapp", "--module", "github.com/acme/myapp", "--no-install", "--git", "--branch", "develop"})
+	cmd.SetArgs([]string{"myapp", "--module", "github.com/acme/myapp", "--no-install", "--branch", "develop"})
 
 	err := runCommandInDir(t, cwd, cmd)
 	if err != nil {
@@ -30,7 +30,6 @@ func TestNewCommandCallsCreateService(t *testing.T) {
 			Module:    "github.com/acme/myapp",
 		},
 		NoInstall: true,
-		Git:       true,
 		Branch:    "develop",
 	}
 	if !reflect.DeepEqual(creator.options, want) {
@@ -79,6 +78,23 @@ func TestExecuteNewWithGitHubReturnsUnsupportedError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "github repository creation is not supported yet") {
 		t.Fatalf("expected unsupported GitHub error, got %q", err.Error())
+	}
+}
+
+func TestNewCommandWithGitReturnsUnsupportedError(t *testing.T) {
+	creator := &recordingCreator{}
+	cmd := newCommandWithCreator(creator)
+	cmd.SetArgs([]string{"myapp", "--git"})
+
+	err := runCommandInDir(t, t.TempDir(), cmd)
+	if err == nil {
+		t.Fatal("expected unsupported git error, got nil")
+	}
+	if !strings.Contains(err.Error(), "git initialization is not supported yet") {
+		t.Fatalf("expected unsupported git error, got %q", err.Error())
+	}
+	if creator.calls != 0 {
+		t.Fatalf("Create() calls = %d, want 0", creator.calls)
 	}
 }
 
