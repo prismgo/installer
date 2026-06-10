@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/prismgo/installer/internal/project"
 	"github.com/spf13/cobra"
 )
 
@@ -30,7 +31,16 @@ func NewCommand() *cobra.Command {
 			if opts.github {
 				return errors.New("github repository creation is not supported yet")
 			}
-			return fmt.Errorf("prismgo new %q is not implemented yet", args[0])
+			// Resolve validates the target before later tasks perform any filesystem creation.
+			plan, err := project.Resolve(project.Options{
+				Name:   args[0],
+				Module: opts.module,
+				Force:  opts.force,
+			})
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("prismgo new %q is not implemented yet", plan.Name)
 		},
 	}
 

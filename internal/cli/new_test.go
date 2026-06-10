@@ -20,6 +20,31 @@ func TestExecuteNewReturnsNotImplementedErrorWithProjectName(t *testing.T) {
 	}
 }
 
+func TestExecuteNewModulePathReturnsNotImplementedErrorWithDirectoryName(t *testing.T) {
+	// Module-path input should resolve successfully and preserve the Task 1 placeholder with the local directory name.
+	err := Execute(context.Background(), []string{"new", "github.com/acme/myapp"})
+	if err == nil {
+		t.Fatal("expected not implemented error, got nil")
+	}
+	if !strings.Contains(err.Error(), "not implemented") {
+		t.Fatalf("expected not implemented error, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "myapp") {
+		t.Fatalf("expected error to include resolved directory name, got %q", err.Error())
+	}
+}
+
+func TestExecuteNewRejectsUnsafeProjectPath(t *testing.T) {
+	// CLI callers should see project validation errors before any later create operation can run.
+	err := Execute(context.Background(), []string{"new", "../app"})
+	if err == nil {
+		t.Fatal("expected unsafe path error, got nil")
+	}
+	if strings.Contains(err.Error(), "not implemented") {
+		t.Fatalf("expected validation error before placeholder, got %q", err.Error())
+	}
+}
+
 func TestExecuteNewWithGitHubReturnsUnsupportedError(t *testing.T) {
 	// --github is explicitly unsupported in the MVP and should not fall through to the generic placeholder.
 	err := Execute(context.Background(), []string{"new", "myapp", "--github"})
