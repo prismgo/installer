@@ -1,5 +1,5 @@
 name: 缺陷报告
-description: 发现 Prismgo Lens 的异常行为时，请在这里报告。
+description: 发现 PrismGo Installer 的异常行为时，请在这里报告。
 labels: ["type/bug"]
 body:
   - type: markdown
@@ -10,7 +10,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        提交前请先检查已有 issue，并确认你使用的是当前 Prismgo Lens 版本或提交。
+        提交前请先检查已有 issue，并确认你使用的是当前 PrismGo Installer 版本或提交。
   - type: textarea
     id: description
     attributes:
@@ -19,10 +19,10 @@ body:
     validations:
       required: true
   - type: input
-    id: lens-version
+    id: installer-version
     attributes:
-      label: Lens 版本或提交
-      description: Prismgo Lens 版本号或提交引用。
+      label: Installer 版本或提交
+      description: PrismGo Installer 版本号或提交引用。
       placeholder: v0.0.0 or 5226a82
     validations:
       required: true
@@ -30,24 +30,25 @@ body:
     id: command
     attributes:
       label: 执行命令
-      description: 触发问题的 prismgo-lens 命令或调用方式。
+      description: 触发问题的 prismgo 命令或调用方式。
+      placeholder: prismgo new tmp/app
       render: shell
     validations:
       required: true
   - type: dropdown
-    id: lens-area
+    id: installer-area
     attributes:
       label: 涉及能力范围
-      description: 选择最接近的 Prismgo Lens 能力范围。
+      description: 选择最接近的 PrismGo Installer 能力范围。
       options:
         - CLI
-        - MCP
-        - Agent 配置
-        - 宿主项目检测
-        - 文档搜索
-        - 浏览器日志
-        - 技能管理
-        - .prismgo-lens.json 配置
+        - 项目生成
+        - 模板渲染
+        - 依赖安装
+        - 配置写入
+        - 错误输出
+        - 跨平台行为
+        - 文档
         - 其他
     validations:
       required: true
@@ -93,5 +94,5 @@ body:
     id: os-version
     attributes:
       label: 操作系统
-      description: 运行 Prismgo Lens 的操作系统和架构。
+      description: 运行 PrismGo Installer 的操作系统和架构。
       placeholder: Ubuntu 24.04 amd64

@@ -1,4 +1,4 @@
-name: CodeQL
+name: PrismGo Installer CodeQL
 
 on:
   push:

@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Go.dev API Documentation
-    url: https://pkg.go.dev/github.com/prismgo/framework
-    about: API documentation for Prismgo packages.
-  - name: Prismgo Documentation
+  - name: PrismGo Documentation
     url: https://github.com/prismgo/framework/tree/main/docs
     about: Project documentation and guides.
+  - name: Go.dev Documentation
+    url: https://go.dev/doc/
+    about: Go language and tooling documentation.
