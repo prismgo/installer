@@ -116,6 +116,11 @@ func normalizeBranch(branch string) (string, error) {
 	if branch == "@" || strings.HasSuffix(branch, ".") || strings.HasSuffix(branch, ".lock") || strings.Contains(branch, "..") || strings.Contains(branch, "@{") {
 		return "", errors.New("git branch name contains invalid sequence")
 	}
+	for _, component := range strings.Split(branch, "/") {
+		if strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
+			return "", errors.New("git branch name contains invalid path component")
+		}
+	}
 	for _, r := range branch {
 		if r <= ' ' || strings.ContainsRune(`~^:?*[\`, r) {
 			return "", errors.New("git branch name contains invalid character")
