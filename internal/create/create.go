@@ -113,7 +113,7 @@ func normalizeBranch(branch string) (string, error) {
 	if strings.HasPrefix(branch, "/") || strings.HasSuffix(branch, "/") || strings.Contains(branch, "//") {
 		return "", errors.New("git branch name contains invalid slash placement")
 	}
-	if branch == "@" || strings.HasSuffix(branch, ".") || strings.HasSuffix(branch, ".lock") || strings.Contains(branch, "..") || strings.Contains(branch, "@{") {
+	if branch == "@" || branch == "HEAD" || strings.HasSuffix(branch, ".") || strings.HasSuffix(branch, ".lock") || strings.Contains(branch, "..") || strings.Contains(branch, "@{") {
 		return "", errors.New("git branch name contains invalid sequence")
 	}
 	for _, component := range strings.Split(branch, "/") {

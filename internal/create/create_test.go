@@ -269,7 +269,7 @@ func TestCreateRejectsInvalidGitBranchBeforeCopy(t *testing.T) {
 }
 
 func TestNormalizeBranchRejectsInvalidNames(t *testing.T) {
-	invalid := []string{"-bad", "/bad", "bad/", "bad//name", "bad..name", "bad.lock", "bad.", "@", "bad@{name", "bad name", "bad:name", "bad\\name", "foo/.bar", "foo.lock/bar"}
+	invalid := []string{"-bad", "/bad", "bad/", "bad//name", "bad..name", "bad.lock", "bad.", "@", "HEAD", "bad@{name", "bad name", "bad:name", "bad\\name", "foo/.bar", "foo.lock/bar"}
 	for _, branch := range invalid {
 		if _, err := normalizeBranch(branch); err == nil {
 			t.Fatalf("normalizeBranch(%q) error = nil, want error", branch)
