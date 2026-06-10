@@ -21,6 +21,9 @@ func safeReplaceFileWithHook(path string, content []byte, beforeFinalCheck func(
 	if !before.Mode().IsRegular() {
 		return fmt.Errorf("%q is not a regular file", path)
 	}
+	if before.Mode().Perm()&0o222 == 0 {
+		return fmt.Errorf("%q is not writable", path)
+	}
 
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")

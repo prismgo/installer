@@ -147,9 +147,9 @@ func TestRewriteModuleReturnsWriteError(t *testing.T) {
 
 	err := RewriteModule(path, "github.com/acme/myapp")
 	if err == nil {
-		t.Skip("filesystem permits writing to read-only owner files")
+		t.Fatal("expected read-only go.mod rewrite to fail")
 	}
-	if !strings.Contains(err.Error(), "write go.mod") {
+	if !strings.Contains(err.Error(), "write go.mod") || !strings.Contains(err.Error(), "not writable") {
 		t.Fatalf("expected write error, got %q", err.Error())
 	}
 }
