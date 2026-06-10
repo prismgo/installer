@@ -92,8 +92,8 @@ func TestRewriteModuleFailsWhenFileIsMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing go.mod to fail")
 	}
-	if !strings.Contains(err.Error(), "inspect go.mod") {
-		t.Fatalf("expected inspect error, got %q", err.Error())
+	if !strings.Contains(err.Error(), "read go.mod") {
+		t.Fatalf("expected read error, got %q", err.Error())
 	}
 }
 
@@ -368,8 +368,12 @@ func main() {}
 func TestSafeReplaceFileRejectsChangedTargetBeforeReplace(t *testing.T) {
 	dir := t.TempDir()
 	path := writeFile(t, dir, "go.mod", "module prismgo\n")
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("stat go.mod: %v", err)
+	}
 
-	err := safeReplaceFileWithHook(path, []byte("module github.com/acme/myapp\n"), func() error {
+	err = safeReplaceFileWithHook(path, []byte("module github.com/acme/myapp\n"), info, func() error {
 		if err := os.Remove(path); err != nil {
 			return err
 		}
@@ -390,8 +394,12 @@ func TestSafeReplaceFileRejectsSymlinkSwappedBeforeReplace(t *testing.T) {
 	dir := t.TempDir()
 	path := writeFile(t, dir, "go.mod", "module prismgo\n")
 	outside := writeFile(t, t.TempDir(), "outside.mod", "module outside\n")
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("stat go.mod: %v", err)
+	}
 
-	err := safeReplaceFileWithHook(path, []byte("module github.com/acme/myapp\n"), func() error {
+	err = safeReplaceFileWithHook(path, []byte("module github.com/acme/myapp\n"), info, func() error {
 		if err := os.Remove(path); err != nil {
 			return err
 		}
@@ -405,6 +413,25 @@ func TestSafeReplaceFileRejectsSymlinkSwappedBeforeReplace(t *testing.T) {
 	}
 	if got := readFile(t, outside); got != "module outside\n" {
 		t.Fatalf("expected outside file to remain untouched, got %q", got)
+	}
+}
+
+func TestSafeReadRegularFileRejectsSourceChangedBeforeOpen(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, ".env.example", "APP_NAME=PrismGo\n")
+	outside := writeFile(t, t.TempDir(), ".env.example", "APP_NAME=Outside\n")
+
+	_, _, err := safeReadRegularFileWithHook(path, func() error {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		return os.Symlink(outside, path)
+	})
+	if err == nil {
+		t.Fatal("expected changed source to fail")
+	}
+	if !strings.Contains(err.Error(), "changed while preparing read") {
+		t.Fatalf("expected changed source error, got %q", err.Error())
 	}
 }
 
@@ -437,8 +464,8 @@ func TestRewriteGoFileImportsFailsWhenFileIsMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing Go file rewrite to fail")
 	}
-	if !strings.Contains(err.Error(), "inspect Go file") {
-		t.Fatalf("expected inspect error, got %q", err.Error())
+	if !strings.Contains(err.Error(), "read Go file") {
+		t.Fatalf("expected read error, got %q", err.Error())
 	}
 }
 

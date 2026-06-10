@@ -2,13 +2,12 @@ package rewrite
 
 import (
 	"fmt"
-	"os"
 	"strings"
 )
 
 // ReadModule reads the module path from the module directive in a go.mod file.
 func ReadModule(path string) (string, error) {
-	content, err := os.ReadFile(path)
+	content, _, err := safeReadRegularFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read go.mod %q: %w", path, err)
 	}
@@ -24,15 +23,7 @@ func ReadModule(path string) (string, error) {
 
 // RewriteModule changes only the module directive line and leaves the rest of go.mod unchanged.
 func RewriteModule(path string, module string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return fmt.Errorf("inspect go.mod %q: %w", path, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("go.mod %q is a symlink", path)
-	}
-
-	content, err := os.ReadFile(path)
+	content, info, err := safeReadRegularFile(path)
 	if err != nil {
 		return fmt.Errorf("read go.mod %q: %w", path, err)
 	}
@@ -48,7 +39,7 @@ func RewriteModule(path string, module string) error {
 			// Preserve the original line ending while replacing only the directive payload.
 			lineEnding := strings.TrimPrefix(line, text)
 			lines[i] = "module " + module + lineEnding
-			if err := safeReplaceFile(path, []byte(strings.Join(lines, ""))); err != nil {
+			if err := safeReplaceFile(path, []byte(strings.Join(lines, "")), info); err != nil {
 				return fmt.Errorf("write go.mod %q: %w", path, err)
 			}
 			return nil

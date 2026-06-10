@@ -38,11 +38,14 @@ func InitEnv(root string) error {
 		return nil
 	}
 
-	content, err := os.ReadFile(examplePath)
+	content, openedInfo, err := safeReadRegularFile(examplePath)
 	if err != nil {
 		return fmt.Errorf("read env example %q: %w", examplePath, err)
 	}
-	if err := writeNewFile(envPath, content, info.Mode().Perm()); err != nil {
+	if !os.SameFile(info, openedInfo) {
+		return fmt.Errorf("env example %q changed while preparing read", examplePath)
+	}
+	if err := writeNewFile(envPath, content, openedInfo.Mode().Perm()); err != nil {
 		return fmt.Errorf("write env file %q: %w", envPath, err)
 	}
 	return nil

@@ -7,7 +7,6 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,16 +39,13 @@ func RewriteImports(root string, oldModule string, newModule string) error {
 }
 
 func rewriteGoFileImports(path string, oldModule string, newModule string) error {
-	info, err := os.Lstat(path)
+	content, info, err := safeReadRegularFile(path)
 	if err != nil {
-		return fmt.Errorf("inspect Go file %q: %w", path, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("rewrite imports %q: symlinked Go files are not supported", path)
+		return fmt.Errorf("read Go file %q: %w", path, err)
 	}
 
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+	file, err := parser.ParseFile(fset, path, content, parser.ParseComments)
 	if err != nil {
 		return fmt.Errorf("parse Go file %q: %w", path, err)
 	}
@@ -76,14 +72,7 @@ func rewriteGoFileImports(path string, oldModule string, newModule string) error
 	if err := format.Node(&formatted, fset, file); err != nil {
 		return fmt.Errorf("format Go file %q: %w", path, err)
 	}
-	info, err = os.Lstat(path)
-	if err != nil {
-		return fmt.Errorf("inspect Go file %q before write: %w", path, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("rewrite imports %q: symlinked Go files are not supported", path)
-	}
-	if err := safeReplaceFile(path, formatted.Bytes()); err != nil {
+	if err := safeReplaceFile(path, formatted.Bytes(), info); err != nil {
 		return fmt.Errorf("write Go file %q: %w", path, err)
 	}
 	return nil

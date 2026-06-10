@@ -2,26 +2,71 @@ package rewrite
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
 
-func safeReplaceFile(path string, content []byte) error {
-	return safeReplaceFileWithHook(path, content, nil)
+func safeReadRegularFile(path string) ([]byte, os.FileInfo, error) {
+	return safeReadRegularFileWithHook(path, nil)
 }
 
-func safeReplaceFileWithHook(path string, content []byte, beforeFinalCheck func() error) error {
-	before, err := os.Lstat(path)
+func safeReadRegularFileWithHook(path string, beforeOpen func() error) ([]byte, os.FileInfo, error) {
+	info, err := os.Lstat(path)
 	if err != nil {
-		return fmt.Errorf("inspect %q: %w", path, err)
+		return nil, nil, fmt.Errorf("inspect %q: %w", path, err)
 	}
-	if before.Mode()&os.ModeSymlink != 0 {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, nil, fmt.Errorf("%q is a symlink", path)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("%q is not a regular file", path)
+	}
+
+	if beforeOpen != nil {
+		if err := beforeOpen(); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open %q: %w", path, err)
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, nil, fmt.Errorf("stat %q: %w", path, err)
+	}
+	if !os.SameFile(info, openedInfo) {
+		return nil, nil, fmt.Errorf("%q changed while preparing read", path)
+	}
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read %q: %w", path, err)
+	}
+	return content, info, nil
+}
+
+func safeReplaceFile(path string, content []byte, expected os.FileInfo) error {
+	return safeReplaceFileWithHook(path, content, expected, nil)
+}
+
+func safeReplaceFileWithHook(path string, content []byte, expected os.FileInfo, beforeFinalCheck func() error) error {
+	if expected == nil {
+		return fmt.Errorf("%q has no expected file identity", path)
+	}
+	if expected.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%q is a symlink", path)
 	}
-	if !before.Mode().IsRegular() {
+	if !expected.Mode().IsRegular() {
 		return fmt.Errorf("%q is not a regular file", path)
 	}
-	if before.Mode().Perm()&0o222 == 0 {
+	if expected.Mode().Perm()&0o222 == 0 {
 		return fmt.Errorf("%q is not writable", path)
 	}
 
@@ -39,7 +84,7 @@ func safeReplaceFileWithHook(path string, content []byte, beforeFinalCheck func(
 		_ = tmp.Close()
 		return fmt.Errorf("write temporary file for %q: %w", path, err)
 	}
-	if err := tmp.Chmod(before.Mode().Perm()); err != nil {
+	if err := tmp.Chmod(expected.Mode().Perm()); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("chmod temporary file for %q: %w", path, err)
 	}
@@ -63,7 +108,7 @@ func safeReplaceFileWithHook(path string, content []byte, beforeFinalCheck func(
 	if !after.Mode().IsRegular() {
 		return fmt.Errorf("%q is not a regular file", path)
 	}
-	if !os.SameFile(before, after) {
+	if !os.SameFile(expected, after) {
 		return fmt.Errorf("%q changed while preparing rewrite", path)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
