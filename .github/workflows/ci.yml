@@ -58,6 +58,16 @@ jobs:
           go-version: ${{ matrix.go }}
           cache: false
 
+      - name: Restore Go smoke caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            tmp/gocache
+            tmp/_gomodcache
+          key: ${{ runner.os }}-go-${{ matrix.go }}-smoke-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ matrix.go }}-smoke-
+
       - name: Generate coverage data
         run: make covdata
 
