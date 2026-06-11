@@ -12,7 +12,7 @@ prismgo new myapp
 
 前置要求：
 
-- Go 工具链，用于安装 installer，并在默认创建流程中运行 `go mod tidy` 和 `go test ./...`
+- Go 1.25+ 工具链，用于安装 installer，并在默认创建流程中运行 `go mod tidy` 和 `go test ./...`
 - Git，用于拉取 `github.com/prismgo/prismgo` 应用骨架；即使不使用 `--git`，创建项目也需要 Git
 - 能访问 GitHub 的网络环境
 
