@@ -166,7 +166,11 @@ smoke-new:
 			cat "$$new_log" >&2; \
 			exit 1; \
 		fi; \
-		( cd "$$ref_dir" && find . -mindepth 1 -maxdepth 1 ! -name .git -exec basename {} \; | sort ) > "$$expected_top"; \
+		if [ -d "$(APP_DIR)/.github" ]; then \
+			echo "Generated app must not contain .github from the PrismGo skeleton" >&2; \
+			exit 1; \
+		fi; \
+		( cd "$$ref_dir" && find . -mindepth 1 -maxdepth 1 ! -name .git ! -name .github -exec basename {} \; | sort ) > "$$expected_top"; \
 		( cd "$(APP_DIR)" && find . -mindepth 1 -maxdepth 1 ! -name .git ! -name .env -exec basename {} \; | sort ) > "$$actual_top"; \
 		echo "Checking generated top-level skeleton structure"; \
 		diff -u "$$expected_top" "$$actual_top"; \

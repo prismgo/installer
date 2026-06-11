@@ -94,7 +94,7 @@ func copyDirectory(ctx context.Context, source string, target string, mode os.Fi
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.Name() == ".git" && entry.IsDir() {
+		if shouldSkipSkeletonDirectory(entry.Name(), entry.IsDir()) {
 			continue
 		}
 
@@ -124,6 +124,11 @@ func copyDirectory(ctx context.Context, source string, target string, mode os.Fi
 		return fmt.Errorf("chmod target directory %q: %w", target, err)
 	}
 	return nil
+}
+
+func shouldSkipSkeletonDirectory(name string, isDir bool) bool {
+	// Repository metadata belongs to the template source and should not become part of generated apps.
+	return isDir && (name == ".git" || name == ".github")
 }
 
 func ensureTargetDirectory(target string, mode os.FileMode) error {

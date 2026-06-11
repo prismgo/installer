@@ -19,6 +19,7 @@ func TestLocalSourceCopiesSkeletonWithoutGitDirectory(t *testing.T) {
 	writeFile(t, filepath.Join(source, "go.mod"), []byte("module prismgo\n"), 0o644)
 	writeFile(t, filepath.Join(source, "app", "http", "controller.go"), []byte("package http\n"), 0o600)
 	writeFile(t, filepath.Join(source, ".git", "config"), []byte("[core]\n"), 0o644)
+	writeFile(t, filepath.Join(source, ".github", "workflows", "ci.yml"), []byte("name: ci\n"), 0o644)
 
 	if err := (LocalSource{Dir: source}).CopyTo(context.Background(), target); err != nil {
 		t.Fatalf("copy skeleton: %v", err)
@@ -26,6 +27,9 @@ func TestLocalSourceCopiesSkeletonWithoutGitDirectory(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(target, ".git")); !os.IsNotExist(err) {
 		t.Fatalf("expected .git to be excluded, stat error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, ".github")); !os.IsNotExist(err) {
+		t.Fatalf("expected .github to be excluded, stat error: %v", err)
 	}
 	assertFileContent(t, filepath.Join(target, "go.mod"), "module prismgo\n")
 	assertFileContent(t, filepath.Join(target, "app", "http", "controller.go"), "package http\n")
@@ -384,6 +388,9 @@ func TestGitHubSourceClonesOfficialRepositoryThenCopiesSkeleton(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(target, ".git")); !os.IsNotExist(err) {
 		t.Fatalf("expected cloned .git to be excluded, stat error: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(target, ".github")); !os.IsNotExist(err) {
+		t.Fatalf("expected cloned .github to be excluded, stat error: %v", err)
+	}
 }
 
 func TestGitHubSourceReturnsRunnerError(t *testing.T) {
@@ -441,6 +448,7 @@ func (r *recordingRunner) Run(ctx context.Context, cmd run.Command) error {
 	cloneTarget := cmd.Args[3]
 	writeFile(r.t, filepath.Join(cloneTarget, "go.mod"), []byte("module prismgo\n"), 0o644)
 	writeFile(r.t, filepath.Join(cloneTarget, ".git", "config"), []byte("[core]\n"), 0o644)
+	writeFile(r.t, filepath.Join(cloneTarget, ".github", "workflows", "ci.yml"), []byte("name: ci\n"), 0o644)
 	return nil
 }
 
