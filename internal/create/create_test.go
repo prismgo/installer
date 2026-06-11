@@ -62,6 +62,7 @@ func TestCreateRunsDefaultSetupCommands(t *testing.T) {
 	}
 
 	want := []run.Command{
+		{Name: "go", Args: []string{"mod", "edit", "-droprequire", "github.com/prismgo/framework"}, Dir: target},
 		{Name: "go", Args: []string{"get", "github.com/prismgo/framework@latest"}, Dir: target},
 		{Name: "go", Args: []string{"mod", "tidy"}, Dir: target},
 		{Name: "go", Args: []string{"test", "./..."}, Dir: target},
@@ -93,6 +94,7 @@ func TestCreateWithGitRunsRepositoryInitializationAfterSetup(t *testing.T) {
 	}
 
 	want := []run.Command{
+		{Name: "go", Args: []string{"mod", "edit", "-droprequire", "github.com/prismgo/framework"}, Dir: target},
 		{Name: "go", Args: []string{"get", "github.com/prismgo/framework@latest"}, Dir: target},
 		{Name: "go", Args: []string{"mod", "tidy"}, Dir: target},
 		{Name: "go", Args: []string{"test", "./..."}, Dir: target},
@@ -310,7 +312,7 @@ func TestCreateReturnsSkeletonErrors(t *testing.T) {
 func TestCreateReturnsSetupCommandErrors(t *testing.T) {
 	// A failing setup command should be returned directly so callers can show the command output.
 	target := filepath.Join(t.TempDir(), "myapp")
-	wantErr := errors.New("go get failed")
+	wantErr := errors.New("go mod edit failed")
 	runner := &recordingRunner{err: wantErr}
 	service := Service{
 		Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
@@ -328,7 +330,69 @@ func TestCreateReturnsSetupCommandErrors(t *testing.T) {
 		t.Fatalf("Create() error = %v, want %v", err, wantErr)
 	}
 	want := []run.Command{
+		{Name: "go", Args: []string{"mod", "edit", "-droprequire", "github.com/prismgo/framework"}, Dir: target},
+	}
+	if !reflect.DeepEqual(runner.commands, want) {
+		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)
+	}
+}
+
+func TestCreateReturnsGoModTidyErrors(t *testing.T) {
+	// The installer should stop immediately when dependency tidying fails after framework resolution.
+	target := filepath.Join(t.TempDir(), "myapp")
+	wantErr := errors.New("go mod tidy failed")
+	runner := &recordingRunner{err: wantErr, errAt: 3}
+	service := Service{
+		Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
+		Runner:   runner,
+	}
+
+	err := service.Create(context.Background(), Options{
+		Project: project.Plan{
+			Name:      "myapp",
+			Directory: target,
+			Module:    "github.com/acme/myapp",
+		},
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Create() error = %v, want %v", err, wantErr)
+	}
+	want := []run.Command{
+		{Name: "go", Args: []string{"mod", "edit", "-droprequire", "github.com/prismgo/framework"}, Dir: target},
 		{Name: "go", Args: []string{"get", "github.com/prismgo/framework@latest"}, Dir: target},
+		{Name: "go", Args: []string{"mod", "tidy"}, Dir: target},
+	}
+	if !reflect.DeepEqual(runner.commands, want) {
+		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)
+	}
+}
+
+func TestCreateReturnsGeneratedProjectTestErrors(t *testing.T) {
+	// Generated project test failures should stop creation before optional git initialization.
+	target := filepath.Join(t.TempDir(), "myapp")
+	wantErr := errors.New("generated project tests failed")
+	runner := &recordingRunner{err: wantErr, errAt: 4}
+	service := Service{
+		Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
+		Runner:   runner,
+	}
+
+	err := service.Create(context.Background(), Options{
+		Project: project.Plan{
+			Name:      "myapp",
+			Directory: target,
+			Module:    "github.com/acme/myapp",
+		},
+		Git: true,
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Create() error = %v, want %v", err, wantErr)
+	}
+	want := []run.Command{
+		{Name: "go", Args: []string{"mod", "edit", "-droprequire", "github.com/prismgo/framework"}, Dir: target},
+		{Name: "go", Args: []string{"get", "github.com/prismgo/framework@latest"}, Dir: target},
+		{Name: "go", Args: []string{"mod", "tidy"}, Dir: target},
+		{Name: "go", Args: []string{"test", "./..."}, Dir: target},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
 		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)
@@ -376,12 +440,16 @@ func (s failingSource) CopyTo(context.Context, string) error {
 type recordingRunner struct {
 	commands []run.Command
 	err      error
+	errAt    int
 }
 
 func (r *recordingRunner) Run(_ context.Context, cmd run.Command) error {
 	// Copy Args so later caller mutations cannot change the recorded command history.
 	cmd.Args = append([]string(nil), cmd.Args...)
 	r.commands = append(r.commands, cmd)
+	if r.errAt > 0 && len(r.commands) != r.errAt {
+		return nil
+	}
 	return r.err
 }
 

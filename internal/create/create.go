@@ -75,6 +75,10 @@ func (s Service) Create(ctx context.Context, opts Options) error {
 		return nil
 	}
 
+	// Drop the skeleton's placeholder framework requirement before resolving @latest.
+	if err := s.Runner.Run(ctx, run.Command{Name: "go", Args: []string{"mod", "edit", "-droprequire", "github.com/prismgo/framework"}, Dir: target}); err != nil {
+		return err
+	}
 	if err := s.Runner.Run(ctx, run.Command{Name: "go", Args: []string{"get", "github.com/prismgo/framework@latest"}, Dir: target}); err != nil {
 		return err
 	}
