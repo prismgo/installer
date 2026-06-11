@@ -61,6 +61,9 @@ jobs:
       - name: Generate coverage data
         run: make covdata
 
+      - name: Run generated application smoke test
+        run: make smoke-new
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
         continue-on-error: true

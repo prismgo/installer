@@ -3,9 +3,16 @@ GOFMT ?= gofmt
 PACKAGES ?= ./...
 BINARY ?= bin/prismgo
 CMD_DIR ?= ./cmd/prismgo
-APP_DIR ?= tmp/app
+SMOKE_ROOT ?= tmp/_smoke-new
+APP_NAME ?= myapp
+APP_MODULE ?= github.com/prismgo/$(APP_NAME)
+APP_DIR ?= $(SMOKE_ROOT)/$(APP_NAME)
+PRISMGO_REPOSITORY ?= https://github.com/prismgo/prismgo
+SMOKE_CREATE_TIMEOUT ?= 300
+SMOKE_RUN_TIMEOUT ?= 30
 LINT_ARGS ?=
 GO_BUILD_CACHE ?= $(CURDIR)/tmp/gocache
+GO_MOD_CACHE ?= $(CURDIR)/tmp/_gomodcache
 GOLANGCI_LINT_CACHE_DIR ?= $(CURDIR)/tmp/golangci-lint
 
 HAS_GOMOD := $(wildcard go.mod)
@@ -22,7 +29,7 @@ help:
 	@echo "  make lint       Run golangci-lint when go.mod exists"
 	@echo "  make build      Build prismgo when cmd/prismgo exists"
 	@echo "  make install    Install prismgo when cmd/prismgo exists"
-	@echo "  make smoke-new  Reserved for prismgo new $(APP_DIR)"
+	@echo "  make smoke-new  Run prismgo new $(APP_NAME) against the live PrismGo skeleton"
 	@echo "  make ci         Run checks valid for the current repository state"
 
 .PHONY: require-go-module
@@ -122,7 +129,84 @@ install:
 
 .PHONY: smoke-new
 smoke-new:
-	@echo "Skipping smoke-new: prismgo new $(APP_DIR) is intentionally deferred until the installer implementation is ready."
+	@if [ -z "$(HAS_CMD)" ]; then \
+		echo "Skipping smoke-new: $(CMD_DIR) is not present yet."; \
+	else \
+		set -eu; \
+		ref_dir="$(SMOKE_ROOT)/prismgo-reference"; \
+		bin_path="$(SMOKE_ROOT)/prismgo"; \
+		new_log="$(SMOKE_ROOT)/prismgo-new.log"; \
+		run_log="$(SMOKE_ROOT)/go-run.log"; \
+		run_pid="$(SMOKE_ROOT)/go-run.pid"; \
+		expected_top="$(SMOKE_ROOT)/expected-top-level.txt"; \
+		actual_top="$(SMOKE_ROOT)/actual-top-level.txt"; \
+		rm -rf "$(SMOKE_ROOT)"; \
+		mkdir -p "$(SMOKE_ROOT)" "$(GO_BUILD_CACHE)" "$(GO_MOD_CACHE)"; \
+		echo "Building PrismGo installer smoke binary"; \
+		env GOCACHE="$(GO_BUILD_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" $(GO) build -o "$$bin_path" $(CMD_DIR); \
+		echo "Cloning live PrismGo skeleton from $(PRISMGO_REPOSITORY)"; \
+		git clone --depth=1 "$(PRISMGO_REPOSITORY)" "$$ref_dir"; \
+		old_module="$$(sed -n 's/^module[[:space:]][[:space:]]*//p' "$$ref_dir/go.mod" | head -n 1)"; \
+		echo "Generating $(APP_NAME) with module $(APP_MODULE)"; \
+		env GOCACHE="$(GO_BUILD_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" "$$bin_path" new "$(APP_DIR)" --module "$(APP_MODULE)" > "$$new_log" 2>&1 & \
+		new_pid="$$!"; \
+		i=0; \
+		while kill -0 "$$new_pid" 2>/dev/null && [ "$$i" -lt "$(SMOKE_CREATE_TIMEOUT)" ]; do \
+			i="$$((i + 1))"; \
+			sleep 1; \
+		done; \
+		if kill -0 "$$new_pid" 2>/dev/null; then \
+			kill "$$new_pid"; \
+			wait "$$new_pid" 2>/dev/null || true; \
+			echo "prismgo new did not finish within $(SMOKE_CREATE_TIMEOUT) seconds" >&2; \
+			cat "$$new_log" >&2; \
+			exit 1; \
+		fi; \
+		if ! wait "$$new_pid"; then \
+			cat "$$new_log" >&2; \
+			exit 1; \
+		fi; \
+		( cd "$$ref_dir" && find . -mindepth 1 -maxdepth 1 ! -name .git -exec basename {} \; | sort ) > "$$expected_top"; \
+		( cd "$(APP_DIR)" && find . -mindepth 1 -maxdepth 1 ! -name .git ! -name .env -exec basename {} \; | sort ) > "$$actual_top"; \
+		echo "Checking generated top-level skeleton structure"; \
+		diff -u "$$expected_top" "$$actual_top"; \
+		echo "Checking module path replacement"; \
+		grep -qx 'module $(APP_MODULE)' "$(APP_DIR)/go.mod"; \
+		if [ -n "$$old_module" ] && grep -R "\"$$old_module/" "$(APP_DIR)" --include='*.go' --include='go.mod'; then \
+			echo "Generated app still contains old import prefix $$old_module/" >&2; \
+			exit 1; \
+		fi; \
+		echo "Checking github.com/prismgo/framework module resolution"; \
+		framework="$$(cd "$(APP_DIR)" && env GOCACHE="$(GO_BUILD_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" $(GO) list -m -f '{{if .Replace}}replace {{.Replace.Path}}{{else}}{{.Version}}{{end}}' github.com/prismgo/framework)"; \
+		case "$$framework" in \
+			""|replace*) echo "github.com/prismgo/framework resolved incorrectly: $$framework" >&2; exit 1 ;; \
+			*) echo "github.com/prismgo/framework $$framework" ;; \
+		esac; \
+		echo "Checking generated app startup output"; \
+		( cd "$(APP_DIR)" && env GOCACHE="$(GO_BUILD_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" $(GO) run . ) > "$$run_log" 2>&1 & \
+		echo "$$!" > "$$run_pid"; \
+		i=0; \
+		while [ "$$i" -lt "$(SMOKE_RUN_TIMEOUT)" ]; do \
+			if grep -q 'PrismGo' "$$run_log"; then \
+				break; \
+			fi; \
+			if ! kill -0 "$$(cat "$$run_pid")" 2>/dev/null; then \
+				break; \
+			fi; \
+			i="$$((i + 1))"; \
+			sleep 1; \
+		done; \
+		if ! grep -q 'PrismGo' "$$run_log"; then \
+			echo "go run . did not print PrismGo within $(SMOKE_RUN_TIMEOUT) seconds" >&2; \
+			cat "$$run_log" >&2; \
+			exit 1; \
+		fi; \
+		if kill -0 "$$(cat "$$run_pid")" 2>/dev/null; then \
+			kill "$$(cat "$$run_pid")"; \
+			wait "$$(cat "$$run_pid")" 2>/dev/null || true; \
+		fi; \
+		echo "smoke-new passed"; \
+	fi
 
 .PHONY: ci
 ci: fmt-check vet test lint
