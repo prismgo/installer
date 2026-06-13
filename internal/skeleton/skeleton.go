@@ -1,17 +1,24 @@
 package skeleton
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/prismgo/installer/internal/run"
 )
 
 const prismgoRepository = "https://github.com/prismgo/prismgo"
+
+const prismgoModule = "github.com/prismgo/prismgo"
+
+var stableVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(\+incompatible)?$`)
 
 // Source acquires a PrismGo skeleton into target.
 type Source interface {
@@ -35,7 +42,9 @@ func (s LocalSource) CopyTo(ctx context.Context, target string) error {
 // GitHubSource clones the official PrismGo repository and copies its contents into target.
 type GitHubSource struct {
 	// Runner executes the git clone command.
-	Runner run.Runner
+	Runner run.OutputRunner
+	// Prompter asks users before falling back to the repository default branch after failures.
+	Prompter FallbackPrompter
 }
 
 // CopyTo clones the official PrismGo repository into a temporary directory, then copies it to target.
@@ -52,13 +61,121 @@ func (s GitHubSource) CopyTo(ctx context.Context, target string) error {
 		_ = os.RemoveAll(tmp)
 	}()
 
-	if err := s.Runner.Run(ctx, run.Command{
-		Name: "git",
-		Args: []string{"clone", "--depth=1", prismgoRepository, tmp},
-	}); err != nil {
-		return err
+	version, err := s.resolveStableVersion(ctx)
+	if err != nil {
+		if ok, promptErr := s.confirmFallback(ctx, "latest stable PrismGo skeleton version could not be resolved", err); promptErr != nil || !ok {
+			return err
+		}
+		if fallbackErr := s.cloneDefaultBranch(ctx, tmp); fallbackErr != nil {
+			return fallbackWithPreviousError(fallbackErr, err)
+		}
+		return copyTree(ctx, tmp, target)
 	}
+	if version == "" {
+		if err := s.cloneDefaultBranch(ctx, tmp); err != nil {
+			return err
+		}
+		return copyTree(ctx, tmp, target)
+	}
+	if err := s.cloneStableVersion(ctx, tmp, version); err != nil {
+		if ok, promptErr := s.confirmFallback(ctx, fmt.Sprintf("stable PrismGo skeleton version %s could not be cloned", version), err); promptErr != nil || !ok {
+			return err
+		}
+		if resetErr := resetTemporaryDirectory(tmp); resetErr != nil {
+			return fallbackWithPreviousError(resetErr, err)
+		}
+		if fallbackErr := s.cloneDefaultBranch(ctx, tmp); fallbackErr != nil {
+			return fallbackWithPreviousError(fallbackErr, err)
+		}
+	}
+
 	return copyTree(ctx, tmp, target)
+}
+
+func (s GitHubSource) resolveStableVersion(ctx context.Context) (string, error) {
+	output, err := s.Runner.Output(ctx, run.Command{
+		Name: "go",
+		Args: []string{"list", "-m", "-f", "{{.Version}}", prismgoModule + "@latest"},
+	})
+	if err != nil {
+		return "", err
+	}
+	version := strings.TrimSpace(string(output))
+	if !stableVersionPattern.MatchString(version) {
+		return "", nil
+	}
+	return version, nil
+}
+
+func (s GitHubSource) cloneStableVersion(ctx context.Context, target string, version string) error {
+	return s.Runner.Run(ctx, run.Command{
+		Name: "git",
+		Args: []string{"clone", "--branch", version, "--depth=1", prismgoRepository, target},
+	})
+}
+
+func (s GitHubSource) cloneDefaultBranch(ctx context.Context, target string) error {
+	return s.Runner.Run(ctx, run.Command{
+		Name: "git",
+		Args: []string{"clone", "--depth=1", prismgoRepository, target},
+	})
+}
+
+func (s GitHubSource) confirmFallback(ctx context.Context, reason string, cause error) (bool, error) {
+	if s.Prompter == nil {
+		return false, nil
+	}
+	return s.Prompter.ConfirmFallback(ctx, reason, cause)
+}
+
+func fallbackWithPreviousError(fallbackErr error, previousErr error) error {
+	return errors.Join(fallbackErr, fmt.Errorf("previous skeleton acquisition failure: %w", previousErr))
+}
+
+func resetTemporaryDirectory(path string) error {
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("remove failed skeleton checkout %q: %w", path, err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		return fmt.Errorf("recreate skeleton checkout directory %q: %w", path, err)
+	}
+	return nil
+}
+
+// FallbackPrompter asks whether skeleton acquisition may use the repository default branch.
+type FallbackPrompter interface {
+	ConfirmFallback(ctx context.Context, reason string, cause error) (bool, error)
+}
+
+// TerminalPrompter reads fallback confirmation from an interactive terminal stream.
+type TerminalPrompter struct {
+	Input  io.Reader
+	Output io.Writer
+}
+
+// ConfirmFallback asks for explicit user consent before default-branch fallback.
+func (p TerminalPrompter) ConfirmFallback(ctx context.Context, reason string, cause error) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if p.Input == nil {
+		return false, errors.New("fallback prompt input is required")
+	}
+	if p.Output == nil {
+		return false, errors.New("fallback prompt output is required")
+	}
+	if _, err := fmt.Fprintf(p.Output, "%s: %v\nFallback to the default branch? [y/N] ", reason, cause); err != nil {
+		return false, err
+	}
+	scanner := bufio.NewScanner(p.Input)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return false, err
+		}
+		return false, io.EOF
+	}
+	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+	return answer == "y" || answer == "yes", nil
 }
 
 func copyTree(ctx context.Context, source string, target string) error {

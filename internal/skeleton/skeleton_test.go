@@ -3,6 +3,7 @@ package skeleton
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -361,7 +362,7 @@ func TestCloseFileReportsCloseError(t *testing.T) {
 
 func TestGitHubSourceClonesOfficialRepositoryThenCopiesSkeleton(t *testing.T) {
 	// The GitHub source delegates network access to Runner so tests can verify the command offline.
-	runner := &recordingRunner{t: t}
+	runner := &recordingRunner{t: t, output: "v1.2.3\n"}
 	target := filepath.Join(t.TempDir(), "app")
 
 	if err := (GitHubSource{Runner: runner}).CopyTo(context.Background(), target); err != nil {
@@ -375,13 +376,13 @@ func TestGitHubSourceClonesOfficialRepositoryThenCopiesSkeleton(t *testing.T) {
 	if command.Name != "git" {
 		t.Fatalf("expected git command, got %q", command.Name)
 	}
-	wantArgs := []string{"clone", "--depth=1", prismgoRepository}
+	wantArgs := []string{"clone", "--branch", "v1.2.3", "--depth=1", prismgoRepository}
 	for i, want := range wantArgs {
 		if command.Args[i] != want {
 			t.Fatalf("expected arg %d to be %q, got %q", i, want, command.Args[i])
 		}
 	}
-	if command.Args[3] == "" {
+	if command.Args[5] == "" {
 		t.Fatal("expected clone target temporary directory")
 	}
 	assertFileContent(t, filepath.Join(target, "go.mod"), "module prismgo\n")
@@ -393,12 +394,147 @@ func TestGitHubSourceClonesOfficialRepositoryThenCopiesSkeleton(t *testing.T) {
 	}
 }
 
-func TestGitHubSourceReturnsRunnerError(t *testing.T) {
-	// Clone failures are returned unchanged enough for callers to report the underlying git problem.
+func TestGitHubSourceFallsBackToDefaultBranchWhenLatestIsNotStable(t *testing.T) {
+	// Missing, invalid, and pre-release versions are not stable skeleton releases.
+	tests := map[string]string{
+		"empty":      "\n",
+		"invalid":    "not-a-version\n",
+		"prerelease": "v1.2.3-rc.1\n",
+	}
+	for name, output := range tests {
+		t.Run(name, func(t *testing.T) {
+			runner := &recordingRunner{t: t, output: output}
+
+			err := (GitHubSource{Runner: runner}).CopyTo(context.Background(), filepath.Join(t.TempDir(), "app"))
+			if err != nil {
+				t.Fatalf("copy GitHub skeleton: %v", err)
+			}
+
+			assertCloneArgs(t, runner.commands[0], []string{"clone", "--depth=1", prismgoRepository})
+		})
+	}
+}
+
+func TestGitHubSourceAsksBeforeFallbackWhenVersionResolutionFails(t *testing.T) {
+	// Network or proxy failures while resolving @latest must not silently switch to the default branch.
+	want := errors.New("go list failed")
+	runner := &recordingRunner{t: t, outputErr: want}
+	prompter := &recordingPrompter{answer: true}
+
+	err := (GitHubSource{Runner: runner, Prompter: prompter}).CopyTo(context.Background(), filepath.Join(t.TempDir(), "app"))
+	if err != nil {
+		t.Fatalf("copy GitHub skeleton after confirmed fallback: %v", err)
+	}
+	if prompter.calls != 1 {
+		t.Fatalf("expected one fallback prompt, got %d", prompter.calls)
+	}
+	assertCloneArgs(t, runner.commands[0], []string{"clone", "--depth=1", prismgoRepository})
+}
+
+func TestGitHubSourceReturnsResolutionErrorWhenFallbackDeclined(t *testing.T) {
+	// A declined fallback preserves the original version resolution error for actionable diagnostics.
+	want := errors.New("go list failed")
+	runner := &recordingRunner{t: t, outputErr: want}
+	prompter := &recordingPrompter{answer: false}
+
+	err := (GitHubSource{Runner: runner, Prompter: prompter}).CopyTo(context.Background(), filepath.Join(t.TempDir(), "app"))
+	if !errors.Is(err, want) {
+		t.Fatalf("expected resolution error, got: %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("expected fallback clone to be skipped, got commands: %#v", runner.commands)
+	}
+}
+
+func TestGitHubSourceReturnsResolutionErrorWithoutPrompter(t *testing.T) {
+	// Non-CLI callers without a prompter should not silently fall back after resolution failure.
+	want := errors.New("go list failed")
+	runner := &recordingRunner{t: t, outputErr: want}
+
+	err := (GitHubSource{Runner: runner}).CopyTo(context.Background(), filepath.Join(t.TempDir(), "app"))
+	if !errors.Is(err, want) {
+		t.Fatalf("expected resolution error, got: %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("expected fallback clone to be skipped, got commands: %#v", runner.commands)
+	}
+}
+
+func TestGitHubSourceReturnsOriginalErrorWhenPromptFails(t *testing.T) {
+	// Prompt failures should not imply fallback consent or hide the original clone failure.
 	want := errors.New("clone failed")
-	err := (GitHubSource{Runner: failingRunner{err: want}}).CopyTo(context.Background(), filepath.Join(t.TempDir(), "app"))
+	runner := &recordingRunner{t: t, output: "v1.2.3\n", err: want, errAt: 1}
+	prompter := &recordingPrompter{err: errors.New("stdin unavailable")}
+
+	err := (GitHubSource{Runner: runner, Prompter: prompter}).CopyTo(context.Background(), filepath.Join(t.TempDir(), "app"))
+	if !errors.Is(err, want) {
+		t.Fatalf("expected original clone error, got: %v", err)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("expected fallback clone to be skipped, got commands: %#v", runner.commands)
+	}
+}
+
+func TestGitHubSourceAsksBeforeFallbackWhenStableCloneFails(t *testing.T) {
+	// A resolved stable release should not fall back to the default branch without explicit user consent.
+	want := errors.New("tag clone failed")
+	runner := &recordingRunner{t: t, output: "v1.2.3\n", err: want, errAt: 1}
+	prompter := &recordingPrompter{answer: true}
+
+	err := (GitHubSource{Runner: runner, Prompter: prompter}).CopyTo(context.Background(), filepath.Join(t.TempDir(), "app"))
+	if err != nil {
+		t.Fatalf("copy GitHub skeleton after confirmed fallback: %v", err)
+	}
+	if prompter.calls != 1 {
+		t.Fatalf("expected one fallback prompt, got %d", prompter.calls)
+	}
+	assertCloneArgs(t, runner.commands[0], []string{"clone", "--branch", "v1.2.3", "--depth=1", prismgoRepository})
+	assertCloneArgs(t, runner.commands[1], []string{"clone", "--depth=1", prismgoRepository})
+}
+
+func TestGitHubSourceCleansFailedStableCloneBeforeFallback(t *testing.T) {
+	// Git can leave partial checkout files behind after a failed clone, so fallback must reuse a clean directory.
+	want := errors.New("tag clone failed")
+	runner := &recordingRunner{t: t, output: "v1.2.3\n", err: want, errAt: 1, dirtyOnError: true}
+	prompter := &recordingPrompter{answer: true}
+
+	err := (GitHubSource{Runner: runner, Prompter: prompter}).CopyTo(context.Background(), filepath.Join(t.TempDir(), "app"))
+	if err != nil {
+		t.Fatalf("copy GitHub skeleton after confirmed fallback: %v", err)
+	}
+	if runner.commands[0].Args[len(runner.commands[0].Args)-1] != runner.commands[1].Args[len(runner.commands[1].Args)-1] {
+		t.Fatal("expected fallback to reuse the same temporary path after cleaning it")
+	}
+}
+
+func TestGitHubSourceReturnsStableCloneErrorWhenFallbackDeclined(t *testing.T) {
+	// Declining fallback after a stable tag clone failure should return the stable clone failure.
+	want := errors.New("clone failed")
+	runner := &recordingRunner{t: t, output: "v1.2.3\n", err: want, errAt: 1}
+	prompter := &recordingPrompter{answer: false}
+
+	err := (GitHubSource{Runner: runner, Prompter: prompter}).CopyTo(context.Background(), filepath.Join(t.TempDir(), "app"))
 	if !errors.Is(err, want) {
 		t.Fatalf("expected runner error, got: %v", err)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("expected only stable clone command, got %d", len(runner.commands))
+	}
+}
+
+func TestGitHubSourceReturnsFallbackErrorWithPreviousContext(t *testing.T) {
+	// If confirmed fallback also fails, users need both the fallback failure and the earlier cause.
+	tagErr := errors.New("tag clone failed")
+	fallbackErr := errors.New("fallback clone failed")
+	runner := &recordingRunner{t: t, output: "v1.2.3\n", errors: map[int]error{1: tagErr, 2: fallbackErr}}
+	prompter := &recordingPrompter{answer: true}
+
+	err := (GitHubSource{Runner: runner, Prompter: prompter}).CopyTo(context.Background(), filepath.Join(t.TempDir(), "app"))
+	if !errors.Is(err, fallbackErr) {
+		t.Fatalf("expected fallback error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), tagErr.Error()) {
+		t.Fatalf("expected previous failure context, got: %v", err)
 	}
 }
 
@@ -431,25 +567,107 @@ func TestGitHubSourceRequiresRunner(t *testing.T) {
 	}
 }
 
+func TestTerminalPrompterAcceptsYesAnswers(t *testing.T) {
+	// Users can explicitly allow fallback with common affirmative answers.
+	var output strings.Builder
+	ok, err := (TerminalPrompter{Input: strings.NewReader("yes\n"), Output: &output}).
+		ConfirmFallback(context.Background(), "stable version failed", errors.New("clone failed"))
+	if err != nil {
+		t.Fatalf("ConfirmFallback() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ConfirmFallback() = false, want true")
+	}
+	if !strings.Contains(output.String(), "stable version failed") {
+		t.Fatalf("expected prompt reason in output, got %q", output.String())
+	}
+}
+
+func TestTerminalPrompterRejectsDefaultAnswer(t *testing.T) {
+	// The prompt defaults to no so accidental enter does not switch skeleton sources.
+	var output strings.Builder
+	ok, err := (TerminalPrompter{Input: strings.NewReader("\n"), Output: &output}).
+		ConfirmFallback(context.Background(), "resolution failed", errors.New("go list failed"))
+	if err != nil {
+		t.Fatalf("ConfirmFallback() error = %v", err)
+	}
+	if ok {
+		t.Fatal("ConfirmFallback() = true, want false")
+	}
+}
+
+func TestTerminalPrompterReturnsContextErrorBeforePrompting(t *testing.T) {
+	// Cancellation should stop before reading from stdin or writing a prompt.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := (TerminalPrompter{Input: strings.NewReader("y\n"), Output: io.Discard}).ConfirmFallback(ctx, "failed", errors.New("cause"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got: %v", err)
+	}
+}
+
+func TestTerminalPrompterReturnsEOFWhenInputIsUnavailable(t *testing.T) {
+	// Non-interactive stdin that cannot provide an answer should not imply consent.
+	_, err := (TerminalPrompter{Input: strings.NewReader(""), Output: io.Discard}).
+		ConfirmFallback(context.Background(), "failed", errors.New("cause"))
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF, got: %v", err)
+	}
+}
+
 type recordingRunner struct {
-	t        *testing.T
-	commands []run.Command
+	t            *testing.T
+	output       string
+	outputErr    error
+	err          error
+	errAt        int
+	dirtyOnError bool
+	errors       map[int]error
+	commands     []run.Command
+	outputs      []run.Command
 }
 
 func (r *recordingRunner) Run(ctx context.Context, cmd run.Command) error {
 	r.t.Helper()
 	r.commands = append(r.commands, cmd)
+	call := len(r.commands)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(cmd.Args) != 4 {
+	if err := r.errors[call]; err != nil {
+		return err
+	}
+	if r.err != nil && r.errAt == call {
+		if r.dirtyOnError {
+			cloneTarget := cmd.Args[len(cmd.Args)-1]
+			writeFile(r.t, filepath.Join(cloneTarget, "partial.txt"), []byte("partial clone\n"), 0o644)
+		}
+		return r.err
+	}
+	if len(cmd.Args) < 4 {
 		r.t.Fatalf("expected git clone destination arg, got args: %#v", cmd.Args)
 	}
-	cloneTarget := cmd.Args[3]
+	cloneTarget := cmd.Args[len(cmd.Args)-1]
+	if entries, err := os.ReadDir(cloneTarget); err == nil && len(entries) > 0 {
+		r.t.Fatalf("expected clean clone target %q, found %d entries", cloneTarget, len(entries))
+	}
 	writeFile(r.t, filepath.Join(cloneTarget, "go.mod"), []byte("module prismgo\n"), 0o644)
 	writeFile(r.t, filepath.Join(cloneTarget, ".git", "config"), []byte("[core]\n"), 0o644)
 	writeFile(r.t, filepath.Join(cloneTarget, ".github", "workflows", "ci.yml"), []byte("name: ci\n"), 0o644)
 	return nil
+}
+
+func (r *recordingRunner) Output(ctx context.Context, cmd run.Command) ([]byte, error) {
+	r.t.Helper()
+	r.outputs = append(r.outputs, cmd)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if r.outputErr != nil {
+		return nil, r.outputErr
+	}
+	return []byte(r.output), nil
 }
 
 type failingRunner struct {
@@ -458,6 +676,39 @@ type failingRunner struct {
 
 func (r failingRunner) Run(context.Context, run.Command) error {
 	return r.err
+}
+
+func (r failingRunner) Output(context.Context, run.Command) ([]byte, error) {
+	return nil, r.err
+}
+
+type recordingPrompter struct {
+	answer bool
+	err    error
+	calls  int
+}
+
+func (p *recordingPrompter) ConfirmFallback(_ context.Context, _ string, _ error) (bool, error) {
+	p.calls++
+	if p.err != nil {
+		return false, p.err
+	}
+	return p.answer, nil
+}
+
+func assertCloneArgs(t *testing.T, command run.Command, wantPrefix []string) {
+	t.Helper()
+	if command.Name != "git" {
+		t.Fatalf("expected git command, got %q", command.Name)
+	}
+	for i, want := range wantPrefix {
+		if command.Args[i] != want {
+			t.Fatalf("expected arg %d to be %q, got %q in %#v", i, want, command.Args[i], command.Args)
+		}
+	}
+	if command.Args[len(command.Args)-1] == "" {
+		t.Fatal("expected clone target temporary directory")
+	}
 }
 
 type errAfterContext struct {

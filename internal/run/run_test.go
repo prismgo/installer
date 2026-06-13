@@ -46,6 +46,48 @@ func TestOSRunnerHandlesFailureWithoutOutput(t *testing.T) {
 	}
 }
 
+func TestOSRunnerOutputReturnsCommandOutput(t *testing.T) {
+	// Version resolution needs command output without callers knowing about os/exec details.
+	output, err := (OSRunner{}).Output(context.Background(), Command{
+		Name: os.Args[0],
+		Args: []string{"-test.run=TestHelperProcess", "--", "success"},
+	})
+	if err != nil {
+		t.Fatalf("expected command to pass, got error: %v", err)
+	}
+	if string(output) != "command output\n" {
+		t.Fatalf("output = %q, want command output", string(output))
+	}
+}
+
+func TestOSRunnerOutputIncludesCombinedOutputInErrors(t *testing.T) {
+	// Failed output commands should include stdout/stderr so version resolution errors stay actionable.
+	_, err := (OSRunner{}).Output(context.Background(), Command{
+		Name: os.Args[0],
+		Args: []string{"-test.run=TestHelperProcess", "--", "fail"},
+	})
+	if err == nil {
+		t.Fatal("expected failing command to return an error")
+	}
+	if !strings.Contains(err.Error(), "command output") {
+		t.Fatalf("expected command output in error, got: %v", err)
+	}
+}
+
+func TestOSRunnerOutputHandlesFailureWithoutOutput(t *testing.T) {
+	// Silent version-resolution failures should still include the command identity.
+	_, err := (OSRunner{}).Output(context.Background(), Command{
+		Name: os.Args[0],
+		Args: []string{"-test.run=TestHelperProcess", "--", "fail-silent"},
+	})
+	if err == nil {
+		t.Fatal("expected failing command to return an error")
+	}
+	if !strings.Contains(err.Error(), os.Args[0]) {
+		t.Fatalf("expected command name in error, got: %v", err)
+	}
+}
+
 func TestHelperProcess(t *testing.T) {
 	if len(os.Args) < 4 || os.Args[len(os.Args)-2] != "--" {
 		return
@@ -53,6 +95,9 @@ func TestHelperProcess(t *testing.T) {
 
 	switch os.Args[len(os.Args)-1] {
 	case "success":
+		if _, err := os.Stdout.WriteString("command output\n"); err != nil {
+			os.Exit(9)
+		}
 		os.Exit(0)
 	case "fail":
 		if _, err := os.Stdout.WriteString("command output\n"); err != nil {

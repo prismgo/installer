@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 
 	"github.com/prismgo/installer/internal/create"
 	"github.com/prismgo/installer/internal/project"
@@ -29,8 +30,11 @@ type creator interface {
 func NewCommand() *cobra.Command {
 	runner := run.OSRunner{}
 	return newCommandWithCreator(create.Service{
-		Skeleton: skeleton.GitHubSource{Runner: runner},
-		Runner:   runner,
+		Skeleton: skeleton.GitHubSource{
+			Runner:   runner,
+			Prompter: skeleton.TerminalPrompter{Input: os.Stdin, Output: os.Stderr},
+		},
+		Runner: runner,
 	})
 }
 

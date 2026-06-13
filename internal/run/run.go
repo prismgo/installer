@@ -19,6 +19,12 @@ type Runner interface {
 	Run(ctx context.Context, cmd Command) error
 }
 
+// OutputRunner executes external commands whose stdout is needed by the caller.
+type OutputRunner interface {
+	Runner
+	Output(ctx context.Context, cmd Command) ([]byte, error)
+}
+
 // OSRunner executes commands on the host operating system.
 type OSRunner struct{}
 
@@ -35,6 +41,21 @@ func (OSRunner) Run(ctx context.Context, cmd Command) error {
 		return fmt.Errorf("run %s: %w", commandString(cmd), err)
 	}
 	return nil
+}
+
+// Output executes cmd and returns its output, preserving command output in returned errors.
+func (OSRunner) Output(ctx context.Context, cmd Command) ([]byte, error) {
+	execCmd := exec.CommandContext(ctx, cmd.Name, cmd.Args...)
+	execCmd.Dir = cmd.Dir
+
+	output, err := execCmd.CombinedOutput()
+	if err != nil {
+		if len(output) > 0 {
+			return nil, fmt.Errorf("run %s: %w: %s", commandString(cmd), err, strings.TrimSpace(string(output)))
+		}
+		return nil, fmt.Errorf("run %s: %w", commandString(cmd), err)
+	}
+	return output, nil
 }
 
 func commandString(cmd Command) string {
