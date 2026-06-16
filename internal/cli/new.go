@@ -35,6 +35,7 @@ func NewCommand() *cobra.Command {
 			Prompter: skeleton.TerminalPrompter{Input: os.Stdin, Output: os.Stderr},
 		},
 		Runner: runner,
+		Output: os.Stderr,
 	})
 }
 

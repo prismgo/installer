@@ -3,6 +3,8 @@ package create
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 
@@ -30,6 +32,8 @@ type Service struct {
 	Skeleton skeleton.Source
 	// Runner executes setup commands in the generated project directory.
 	Runner run.Runner
+	// Output receives user-facing progress lines for each creation step.
+	Output io.Writer
 }
 
 // Create generates a PrismGo application from the configured skeleton source.
@@ -50,6 +54,9 @@ func (s Service) Create(ctx context.Context, opts Options) error {
 	}
 
 	target := opts.Project.Directory
+	if err := s.progress("Creating project directory..."); err != nil {
+		return err
+	}
 	if err := s.Skeleton.CopyTo(ctx, target); err != nil {
 		return err
 	}
@@ -59,10 +66,19 @@ func (s Service) Create(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	if err := s.progress("Updating module path..."); err != nil {
+		return err
+	}
 	if err := rewrite.RewriteModule(goModPath, opts.Project.Module); err != nil {
 		return err
 	}
+	if err := s.progress("Updating imports..."); err != nil {
+		return err
+	}
 	if err := rewrite.RewriteImports(target, oldModule, opts.Project.Module); err != nil {
+		return err
+	}
+	if err := s.progress("Creating environment file..."); err != nil {
 		return err
 	}
 	if err := rewrite.InitEnv(target); err != nil {
@@ -70,28 +86,46 @@ func (s Service) Create(ctx context.Context, opts Options) error {
 	}
 	if opts.NoInstall {
 		if opts.Git {
-			return s.initGit(ctx, target, branch)
+			if err := s.initGit(ctx, target, branch); err != nil {
+				return err
+			}
+			return s.complete(target)
 		}
-		return nil
+		return s.complete(target)
 	}
 
 	// Drop the skeleton's placeholder framework requirement before resolving @latest.
+	if err := s.progress("Preparing framework dependency..."); err != nil {
+		return err
+	}
 	if err := s.Runner.Run(ctx, run.Command{Name: "go", Args: []string{"mod", "edit", "-droprequire", "github.com/prismgo/framework"}, Dir: target}); err != nil {
+		return err
+	}
+	if err := s.progress("Installing framework dependency..."); err != nil {
 		return err
 	}
 	if err := s.Runner.Run(ctx, run.Command{Name: "go", Args: []string{"get", "github.com/prismgo/framework@latest"}, Dir: target}); err != nil {
 		return err
 	}
+	if err := s.progress("Tidying dependencies..."); err != nil {
+		return err
+	}
 	if err := s.Runner.Run(ctx, run.Command{Name: "go", Args: []string{"mod", "tidy"}, Dir: target}); err != nil {
+		return err
+	}
+	if err := s.progress("Testing generated project..."); err != nil {
 		return err
 	}
 	if err := s.Runner.Run(ctx, run.Command{Name: "go", Args: []string{"test", "./..."}, Dir: target}); err != nil {
 		return err
 	}
 	if !opts.Git {
-		return nil
+		return s.complete(target)
 	}
-	return s.initGit(ctx, target, branch)
+	if err := s.initGit(ctx, target, branch); err != nil {
+		return err
+	}
+	return s.complete(target)
 }
 
 func (s Service) initGit(ctx context.Context, target string, branch string) error {
@@ -103,11 +137,26 @@ func (s Service) initGit(ctx context.Context, target string, branch string) erro
 		{Name: "git", Args: []string{"branch", "-M", "--", branch}, Dir: target},
 	}
 	for _, command := range commands {
+		if err := s.progress("Running " + command.Name + " " + strings.Join(command.Args, " ") + "..."); err != nil {
+			return err
+		}
 		if err := s.Runner.Run(ctx, command); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s Service) progress(message string) error {
+	if s.Output == nil {
+		return nil
+	}
+	_, err := fmt.Fprintln(s.Output, message)
+	return err
+}
+
+func (s Service) complete(target string) error {
+	return s.progress("Project created successfully: " + target)
 }
 
 func normalizeBranch(branch string) (string, error) {

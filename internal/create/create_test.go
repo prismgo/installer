@@ -1,8 +1,10 @@
 package create
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -45,9 +47,11 @@ func TestCreateRunsDefaultSetupCommands(t *testing.T) {
 	// The default flow verifies the generated app after rewrite so users get a ready project.
 	target := filepath.Join(t.TempDir(), "myapp")
 	runner := &recordingRunner{}
+	output := &bytes.Buffer{}
 	service := Service{
 		Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
 		Runner:   runner,
+		Output:   output,
 	}
 
 	err := service.Create(context.Background(), Options{
@@ -69,6 +73,23 @@ func TestCreateRunsDefaultSetupCommands(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
 		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)
+	}
+
+	// Progress output should name each major step so users can tell where creation is spending time.
+	wantOutput := strings.Join([]string{
+		"Creating project directory...",
+		"Updating module path...",
+		"Updating imports...",
+		"Creating environment file...",
+		"Preparing framework dependency...",
+		"Installing framework dependency...",
+		"Tidying dependencies...",
+		"Testing generated project...",
+		"Project created successfully: " + target,
+		"",
+	}, "\n")
+	if output.String() != wantOutput {
+		t.Fatalf("progress output = %q, want %q", output.String(), wantOutput)
 	}
 }
 
@@ -166,9 +187,11 @@ func TestCreateNoInstallWithGitRunsOnlyRepositoryInitialization(t *testing.T) {
 	// When install is skipped, git initialization should still commit the rewritten project files.
 	target := filepath.Join(t.TempDir(), "myapp")
 	runner := &recordingRunner{}
+	output := &bytes.Buffer{}
 	service := Service{
 		Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
 		Runner:   runner,
+		Output:   output,
 	}
 
 	err := service.Create(context.Background(), Options{
@@ -192,6 +215,18 @@ func TestCreateNoInstallWithGitRunsOnlyRepositoryInitialization(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
 		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)
+	}
+
+	// The no-install path should still show filesystem and git steps, but no dependency installation steps.
+	gotOutput := output.String()
+	if !strings.Contains(gotOutput, "Creating project directory...\n") || !strings.Contains(gotOutput, "Running git init...\n") {
+		t.Fatalf("progress output = %q, want filesystem and git steps", gotOutput)
+	}
+	if strings.Contains(gotOutput, "Installing framework dependency") {
+		t.Fatalf("progress output = %q, want no dependency install step", gotOutput)
+	}
+	if !strings.Contains(gotOutput, "Project created successfully: "+target+"\n") {
+		t.Fatalf("progress output = %q, want completion step", gotOutput)
 	}
 }
 
@@ -309,14 +344,57 @@ func TestCreateReturnsSkeletonErrors(t *testing.T) {
 	}
 }
 
+func TestCreateReturnsProgressOutputErrors(t *testing.T) {
+	// A broken progress stream should stop before starting filesystem writes so users see the output failure.
+	wantErr := errors.New("write failed")
+	err := (Service{
+		Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
+		Output:   failingWriter{err: wantErr},
+	}).Create(context.Background(), Options{
+		Project: project.Plan{
+			Directory: filepath.Join(t.TempDir(), "myapp"),
+			Module:    "github.com/acme/myapp",
+		},
+		NoInstall: true,
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Create() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestCreateReturnsProgressOutputErrorsFromLaterSteps(t *testing.T) {
+	// Each progress write is checked so a broken terminal stream returns a concrete failure.
+	for _, failAt := range []int{2, 3, 4, 5, 6, 7, 8} {
+		t.Run(fmt.Sprintf("write_%d", failAt), func(t *testing.T) {
+			target := filepath.Join(t.TempDir(), "myapp")
+			wantErr := errors.New("write failed")
+			err := (Service{
+				Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
+				Runner:   &recordingRunner{},
+				Output:   &countingFailingWriter{failAt: failAt, err: wantErr},
+			}).Create(context.Background(), Options{
+				Project: project.Plan{
+					Directory: target,
+					Module:    "github.com/acme/myapp",
+				},
+			})
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("Create() error = %v, want %v", err, wantErr)
+			}
+		})
+	}
+}
+
 func TestCreateReturnsSetupCommandErrors(t *testing.T) {
 	// A failing setup command should be returned directly so callers can show the command output.
 	target := filepath.Join(t.TempDir(), "myapp")
 	wantErr := errors.New("go mod edit failed")
 	runner := &recordingRunner{err: wantErr}
+	output := &bytes.Buffer{}
 	service := Service{
 		Skeleton: skeleton.LocalSource{Dir: filepath.Join("testdata", "skeleton")},
 		Runner:   runner,
+		Output:   output,
 	}
 
 	err := service.Create(context.Background(), Options{
@@ -334,6 +412,14 @@ func TestCreateReturnsSetupCommandErrors(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
 		t.Fatalf("recorded commands = %#v, want %#v", runner.commands, want)
+	}
+
+	// The final printed step should be the operation that failed.
+	if !strings.HasSuffix(output.String(), "Preparing framework dependency...\n") {
+		t.Fatalf("progress output = %q, want to end at failing setup step", output.String())
+	}
+	if strings.Contains(output.String(), "Project created successfully") {
+		t.Fatalf("progress output = %q, want no completion message after failure", output.String())
 	}
 }
 
@@ -435,6 +521,28 @@ type failingSource struct {
 
 func (s failingSource) CopyTo(context.Context, string) error {
 	return s.err
+}
+
+type failingWriter struct {
+	err error
+}
+
+func (w failingWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+type countingFailingWriter struct {
+	writes int
+	failAt int
+	err    error
+}
+
+func (w *countingFailingWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failAt {
+		return 0, w.err
+	}
+	return len(p), nil
 }
 
 type recordingRunner struct {
